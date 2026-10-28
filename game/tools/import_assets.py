@@ -30,8 +30,6 @@ SETS = {
               f'{PH}/burned_ground_01/burned_ground_01_rough_2k.jpg', f'{PH}/burned_ground_01/burned_ground_01_ao_2k.jpg', 1024),
     'cliff': (f'{CG}/Rock031/Rock031_2K-JPG_Color.jpg', f'{CG}/Rock031/Rock031_2K-JPG_NormalGL.jpg',
               f'{CG}/Rock031/Rock031_2K-JPG_Roughness.jpg', f'{CG}/Rock031/Rock031_2K-JPG_AmbientOcclusion.jpg', 2048),
-    'dirt': (f'{CG}/Ground051/Ground051_2K-JPG_Color.jpg', f'{CG}/Ground051/Ground051_2K-JPG_NormalGL.jpg',
-             f'{CG}/Ground051/Ground051_2K-JPG_Roughness.jpg', f'{CG}/Ground051/Ground051_2K-JPG_AmbientOcclusion.jpg', 1024),
     'lava': (f'{CG}/Lava002/Lava002_2K-JPG_Color.jpg', f'{CG}/Lava002/Lava002_2K-JPG_NormalGL.jpg',
              f'{CG}/Lava002/Lava002_2K-JPG_Roughness.jpg', None, 1024),
     'rust': (f'{PH}/rusty_metal_02/rusty_metal_02_diff_2k.jpg', f'{PH}/rusty_metal_02/rusty_metal_02_nor_gl_2k.jpg',

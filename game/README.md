@@ -40,6 +40,7 @@ Needs Blender as a Python module (`pip install bpy`), numpy, scipy, pillow, and 
 python tools/world.py             # heightmap, masks, track + lava data -> public/world
 python tools/textures.py          # procedural sprites / detail maps -> public/textures
 python tools/import_assets.py     # Poly Haven / ambientCG maps + HDRI -> public/textures/ext, public/env
+python tools/pack_terrain.py      # pack terrain sets into albedo+rough / normal+AO pairs (16-texture GPUs)
 python tools/decimate_props.py    # game-budget rock/prop models -> public/models/env
 python tools/truck/bake.py        # truck model + baked textures -> public/models/truck*
 ```

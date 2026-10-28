@@ -48,9 +48,11 @@ function tex(name, srgb = false) {
 }
 export function loadMaterials() {
   const set = (n) => ({ a: tex(`${n}_albedo.jpg`, true), n: tex(`${n}_normal.jpg`), o: tex(`${n}_orm.jpg`) });
+  // packed sets: albedo + roughness in alpha, and normal XY + AO (see tools/pack_terrain.py)
+  const pset = (n) => ({ a: tex(`${n}_ar.webp`, true), p: tex(`${n}_nao.jpg`) });
   return {
-    ash: set('ext/track'), sco: set('ext/gravel'), bas: set('ext/cliff'), lava: set('ext/lava'),
-    burnt: set('ext/burnt'), heat: tex('ext/lava_heat.jpg'), molten: tex('ext/lava_molten.jpg', true), detail: tex('detail_normal.jpg'), noise: tex('noise.png'),
+    ash: pset('ext/track'), sco: pset('ext/gravel'), bas: pset('ext/cliff'), lava: set('ext/lava'),
+    burnt: pset('ext/burnt'), heat: tex('ext/lava_heat.jpg'), molten: tex('ext/lava_molten.jpg', true), detail: tex('detail_normal.jpg'), noise: tex('noise.png'),
     smoke: (() => { const t = loader.load(`${BASE}textures/smoke.png`); return t; })(),
   };
 }
@@ -65,6 +67,8 @@ vec4 texAT(sampler2D t, vec2 uv, float n) {
   return mix(a, b, smoothstep(0.35, 0.65, n));
 }
 vec3 unpackN(vec4 c) { return c.xyz * 2.0 - 1.0; }
+// packed normal map: RG = tangent normal XY, B = AO
+vec3 unpackNP(vec4 c) { vec2 xy = c.xy * 2.0 - 1.0; return vec3(xy, sqrt(max(0.0, 1.0 - dot(xy, xy)))); }
 // Reoriented top-projection: tangent normal sampled with uv = world.xz -> world normal
 vec3 topToWorld(vec3 tn, vec3 N) {
   vec3 t = vec3(tn.xy + N.xz, abs(tn.z) * N.y);
@@ -129,11 +133,11 @@ export function buildTerrain(world, M, quality) {
   const mat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 });
   const uniforms = {
     tNH: { value: ntex }, tMask: { value: mask }, tNoise: { value: M.noise },
-    ashA: { value: M.ash.a }, ashN: { value: M.ash.n }, ashO: { value: M.ash.o },
-    scoA: { value: M.sco.a }, scoN: { value: M.sco.n }, scoO: { value: M.sco.o },
-    basA: { value: M.bas.a }, basN: { value: M.bas.n }, basO: { value: M.bas.o },
-    lavA: { value: M.lava.a }, lavN: { value: M.lava.n }, tDetail: { value: M.detail },
-    brA: { value: M.burnt.a }, brN: { value: M.burnt.n }, brO: { value: M.burnt.o },
+    ashA: { value: M.ash.a }, ashP: { value: M.ash.p },
+    scoA: { value: M.sco.a }, scoP: { value: M.sco.p },
+    basA: { value: M.bas.a }, basP: { value: M.bas.p },
+    tDetail: { value: M.detail },
+    brA: { value: M.burnt.a }, brP: { value: M.burnt.p },
     uExtent: { value: extent },
   };
   mat.onBeforeCompile = (sh) => {
@@ -144,7 +148,8 @@ export function buildTerrain(world, M, quality) {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
 varying vec3 vW;
-uniform sampler2D tNH, tMask, ashA, ashN, ashO, scoA, scoN, scoO, basA, basN, basO, lavA, lavN, tDetail, brA, brN, brO;
+// 12 samplers here + shadow map + environment stays within the common 16-unit limit
+uniform sampler2D tNH, tMask, ashA, ashP, scoA, scoP, basA, basP, tDetail, brA, brP;
 uniform float uExtent;
 ${GLSL_COMMON}
 vec3 gN; float gAO; vec3 gEm;`)
@@ -160,15 +165,15 @@ float camD = length(vW - cameraPosition);
 // ground layers (top projected)
 vec2 uvS = vW.xz / 3.0;
 vec2 uvA = vW.xz / 6.0;
-vec4 sA = texAT(scoA, uvS, nz.g); vec4 sO = texAT(scoO, uvS, nz.g); vec3 sN = unpackN(texAT(scoN, uvS, nz.g));
-vec4 aA = texAT(ashA, uvA, nz.b); vec4 aO = texAT(ashO, uvA, nz.b); vec3 aN = unpackN(texAT(ashN, uvA, nz.b));
+vec4 sA = texAT(scoA, uvS, nz.g); vec4 sP = texAT(scoP, uvS, nz.g); vec3 sN = unpackNP(sP); vec2 sO = vec2(sP.b, sA.a);
+vec4 aA = texAT(ashA, uvA, nz.b); vec4 aP = texAT(ashP, uvA, nz.b); vec3 aN = unpackNP(aP); vec2 aO = vec2(aP.b, aA.a);
 // black cinder gravel and burnt ash ground in large patches
-vec4 bbA = texAT(brA, vW.xz / 4.0, nz.b); vec4 bbO = texAT(brO, vW.xz / 4.0, nz.b); vec3 bbN = unpackN(texAT(brN, vW.xz / 4.0, nz.b));
+vec4 bbA = texAT(brA, vW.xz / 4.0, nz.b); vec4 bbP = texAT(brP, vW.xz / 4.0, nz.b); vec3 bbN = unpackNP(bbP); vec2 bbO = vec2(bbP.b, bbA.a);
 sA.rgb *= vec3(0.5, 0.46, 0.43);
 float pB = smoothstep(0.4, 0.62, nz.r * 0.8 + nz2.g * 0.35);
 vec3 groundA = mix(sA.rgb, bbA.rgb * vec3(0.8, 0.75, 0.72), pB);
 vec3 gN0 = normalize(mix(sN, bbN, pB));
-vec2 gRO0 = mix(sO.rg, bbO.rg, pB);
+vec2 gRO0 = mix(sO, bbO, pB);
 // darker wind-packed ash on the upper cone with rust-red oxidised streaks
 float hAsh = smoothstep(150.0, 320.0, vW.y + nz.r * 80.0);
 float lum = dot(groundA, vec3(0.3, 0.55, 0.15));
@@ -177,15 +182,17 @@ groundA = mix(groundA, coneC, hAsh * 0.7);
 float wRoad = smoothstep(0.05, 0.6, msk.g) * (1.0 - smoothstep(0.08, 0.2, slope));
 groundA = mix(groundA, aA.rgb * 0.8, wRoad);
 vec3 groundN = normalize(mix(gN0, aN, wRoad));
-vec2 groundRO = mix(gRO0, aO.rg, wRoad);
+vec2 groundRO = mix(gRO0, aO, wRoad);
 
 // triplanar basalt on steep faces
 vec3 bw = pow(abs(Ng), vec3(4.0)); bw /= (bw.x + bw.y + bw.z);
 float rs = 1.0 / 7.0;
 vec2 uX = vW.zy * rs, uY = vW.xz * rs, uZ = vW.xy * rs;
-vec3 bA = texture(basA, uX).rgb * bw.x + texture(basA, uY).rgb * bw.y + texture(basA, uZ).rgb * bw.z;
-vec2 bO = texture(basO, uX).rg * bw.x + texture(basO, uY).rg * bw.y + texture(basO, uZ).rg * bw.z;
-vec3 tnX = unpackN(texture(basN, uX)), tnY = unpackN(texture(basN, uY)), tnZ = unpackN(texture(basN, uZ));
+vec4 cX = texture(basA, uX), cY = texture(basA, uY), cZ = texture(basA, uZ);
+vec3 bA = cX.rgb * bw.x + cY.rgb * bw.y + cZ.rgb * bw.z;
+vec4 pX = texture(basP, uX), pY = texture(basP, uY), pZ = texture(basP, uZ);
+vec2 bO = vec2(pX.b, cX.a) * bw.x + vec2(pY.b, cY.a) * bw.y + vec2(pZ.b, cZ.a) * bw.z;
+vec3 tnX = unpackNP(pX), tnY = unpackNP(pY), tnZ = unpackNP(pZ);
 tnX = vec3(tnX.xy + Ng.zy, abs(tnX.z) * Ng.x);
 tnY = vec3(tnY.xy + Ng.xz, abs(tnY.z) * Ng.y);
 tnZ = vec3(tnZ.xy + Ng.xy, abs(tnZ.z) * Ng.z);
@@ -272,7 +279,7 @@ export function buildTrackRibbon(world, M) {
     side: THREE.DoubleSide, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
   });
   const uniforms = {
-    ashA: { value: M.ash.a }, ashN: { value: M.ash.n }, ashO: { value: M.ash.o }, tNoise: { value: M.noise },
+    ashA: { value: M.ash.a }, ashP: { value: M.ash.p }, tNoise: { value: M.noise },
     tDetail: { value: M.detail }, uHalfW: { value: W / 2 },
   };
   mat.onBeforeCompile = (sh) => {
@@ -283,7 +290,7 @@ export function buildTrackRibbon(world, M) {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
 varying vec3 vW; varying vec2 vT;
-uniform sampler2D ashA, ashN, ashO, tDetail; uniform float uHalfW;
+uniform sampler2D ashA, ashP, tDetail; uniform float uHalfW;
 ${GLSL_COMMON}
 vec3 rN; float rAO; float rR;`)
       .replace('#include <map_fragment>', /* glsl */`
@@ -304,8 +311,8 @@ for (int k = 0; k < 4; k++) {
 float centreWear = exp(-pow(l / 4.5, 2.0));
 vec2 uv = vec2(along / 6.0, lat / 6.0 + 0.5);
 vec4 A = texAT(ashA, uv, nzf.r);
-vec4 O = texAT(ashO, uv, nzf.r);
-vec3 tn = unpackN(texAT(ashN, uv, nzf.r));
+vec4 P = texAT(ashP, uv, nzf.r);
+vec3 tn = unpackNP(P);
 // packed ruts are darker, smoother; loose material collects outside them
 // cool the brown mud toward volcanic grey-brown
 vec3 col = mix(A.rgb, vec3(dot(A.rgb, vec3(0.33))) * vec3(1.08, 1.0, 0.93), 0.45) * 1.15;
@@ -319,7 +326,7 @@ tn = normalize(mix(tn, vec3(0, 0, 1), rut * 0.55));
 tn.x += rutD * 0.03 * 0.0; // keep rut normals subtle
 vec3 dN = unpackN(texture(tDetail, vW.xz / 1.1));
 tn = normalize(tn + vec3(dN.xy, 0.0) * 0.25);
-rN = tn; rAO = O.r; rR = mix(O.g, 0.62, rut * 0.6);
+rN = tn; rAO = P.b; rR = mix(A.a, 0.62, rut * 0.6);
 diffuseColor.rgb = col;
 float fade = 1.0 - smoothstep(uHalfW + 0.5, uHalfW * 1.55, abs(lat) + (nzf.b - 0.5) * 5.0);
 diffuseColor.a = fade;
@@ -438,125 +445,7 @@ lavaN = normalize(mix(lavaN, vec3(0,0,1), molten * 0.7));
   return group;
 }
 
-// ---------------------------------------------------------------- rocks
-function rockGeometry(seed, detail = 4) {
-  const g = new THREE.IcosahedronGeometry(1, detail);
-  const p = g.attributes.position;
-  const rnd = mulberry(seed);
-  const planes = [];
-  for (let i = 0; i < 7; i++) {
-    const n = new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).normalize();
-    planes.push([n, 0.55 + rnd() * 0.35]);
-  }
-  const v = new THREE.Vector3();
-  const sx = 0.8 + rnd() * 0.6, sy = 0.5 + rnd() * 0.4, sz = 0.8 + rnd() * 0.5;
-  for (let i = 0; i < p.count; i++) {
-    v.fromBufferAttribute(p, i);
-    // faceted, fractured look: clip by random planes, then add noise
-    let r = 1;
-    for (const [n, d] of planes) {
-      const t = v.dot(n);
-      if (t * r > d) r = d / t;
-    }
-    v.multiplyScalar(r);
-    const nn = vnoise(v.x * 2.3 + seed, v.y * 2.3, v.z * 2.3) * 0.12 + vnoise(v.x * 6, v.y * 6 + seed, v.z * 6) * 0.04;
-    v.multiplyScalar(1 + nn);
-    p.setXYZ(i, v.x * sx, v.y * sy, v.z * sz);
-  }
-  g.computeVertexNormals();
-  return g;
-}
-
-export function buildRocks(world, M, quality) {
-  const group = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ roughness: 1 });
-  const uniforms = { basA: { value: M.bas.a }, basN: { value: M.bas.n }, basO: { value: M.bas.o }, tNoise: { value: M.noise },
-    scoA: { value: M.sco.a } };
-  mat.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, uniforms);
-    sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vW; varying vec3 vWN;')
-      .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
-vW = (modelMatrix * instanceMatrix * vec4(transformed,1.0)).xyz;
-vWN = normalize(mat3(modelMatrix * instanceMatrix) * objectNormal);`);
-    sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', `#include <common>
-varying vec3 vW; varying vec3 vWN;
-uniform sampler2D basA, basN, basO, scoA;
-${GLSL_COMMON}
-vec3 kN; float kAO; float kR;`)
-      .replace('#include <map_fragment>', `
-vec3 Ng = normalize(vWN);
-vec3 bw = pow(abs(Ng), vec3(4.0)); bw /= (bw.x + bw.y + bw.z);
-float rs = 1.0 / 3.5;
-vec2 uX = vW.zy * rs, uY = vW.xz * rs, uZ = vW.xy * rs;
-vec3 bA = texture(basA, uX).rgb * bw.x + texture(basA, uY).rgb * bw.y + texture(basA, uZ).rgb * bw.z;
-vec2 bO = texture(basO, uX).rg * bw.x + texture(basO, uY).rg * bw.y + texture(basO, uZ).rg * bw.z;
-vec3 tnX = unpackN(texture(basN, uX)), tnY = unpackN(texture(basN, uY)), tnZ = unpackN(texture(basN, uZ));
-tnX = vec3(tnX.xy + Ng.zy, abs(tnX.z) * Ng.x);
-tnY = vec3(tnY.xy + Ng.xz, abs(tnY.z) * Ng.y);
-tnZ = vec3(tnZ.xy + Ng.xy, abs(tnZ.z) * Ng.z);
-kN = normalize(tnX.zyx * bw.x + tnY.xzy * bw.y + tnZ.xyz * bw.z);
-// dust settles on top faces
-float dust = smoothstep(0.55, 0.95, Ng.y) * 0.55;
-vec3 dc = texture(scoA, vW.xz / 5.0).rgb * 1.15;
-diffuseColor.rgb = mix(bA * 1.1, dc, dust);
-kAO = bO.r; kR = mix(bO.g, 0.95, dust);
-`)
-      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = kR;')
-      .replace('#include <normal_fragment_maps>', 'normal = normalize((viewMatrix * vec4(kN, 0.0)).xyz);')
-      .replace('#include <aomap_fragment>', 'reflectedLight.indirectDiffuse *= kAO;');
-  };
-  const variants = [0, 1, 2, 3, 4, 5].map((s) => rockGeometry(s * 17 + 3, quality.rockDetail));
-  const counts = variants.map(() => []);
-  const rnd = mulberry(99);
-  const c = world.track.centre;
-  const W = world.track.width;
-  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), sc = new THREE.Vector3(), p = new THREE.Vector3();
-  const N = new THREE.Vector3();
-  const place = (x, z, size, sink = 0.3) => {
-    const y = world.heightAt(x, z);
-    world.normalAt(x, z, N);
-    e.set(rnd() * 0.5, rnd() * 6.28, rnd() * 0.5);
-    q.setFromEuler(e);
-    const up = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), N);
-    q.premultiply(up);
-    sc.set(size * (0.8 + rnd() * 0.5), size * (0.6 + rnd() * 0.6), size * (0.8 + rnd() * 0.5));
-    p.set(x, y - sc.y * sink, z);
-    m4.compose(p, q, sc);
-    counts[Math.floor(rnd() * variants.length)].push(m4.clone());
-  };
-  // track-side boulders and rubble
-  for (let i = 0; i < c.length; i += 3) {
-    const pnt = c[i], nx = c[(i + 1) % c.length];
-    const tx = nx[0] - pnt[0], tz = nx[2] - pnt[2];
-    const L = Math.hypot(tx, tz) || 1;
-    for (const side of [-1, 1]) {
-      if (rnd() < 0.55) {
-        const lat = side * (W / 2 + 4 + Math.pow(rnd(), 2) * 45);
-        const x = pnt[0] - tz / L * lat + (rnd() - 0.5) * 3, z = pnt[2] + tx / L * lat + (rnd() - 0.5) * 3;
-        const near = Math.abs(lat) < W / 2 + 10;
-        const size = near ? 0.25 + rnd() * 0.7 : 0.4 + Math.pow(rnd(), 3) * 6;
-        if (!nearTrack(world, x, z, W / 2 + 3)) place(x, z, size);
-      }
-    }
-  }
-  // scattered field boulders
-  for (let i = 0; i < quality.fieldRocks; i++) {
-    const a = rnd() * Math.PI * 2, r = 160 + Math.pow(rnd(), 0.7) * 900;
-    const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    if (!nearTrack(world, x, z, W / 2 + 4)) place(x, z, 0.6 + Math.pow(rnd(), 4) * 14, 0.4);
-  }
-  variants.forEach((g, i) => {
-    const list = counts[i];
-    const im = new THREE.InstancedMesh(g, mat, list.length);
-    list.forEach((m, j) => im.setMatrixAt(j, m));
-    im.castShadow = true; im.receiveShadow = true;
-    im.computeBoundingSphere();
-    group.add(im);
-  });
-  return group;
-}
+// ---------------------------------------------------------------- track proximity
 
 let trackGrid = null;
 export function nearTrack(world, x, z, r) {

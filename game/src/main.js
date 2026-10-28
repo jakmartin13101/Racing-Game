@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { EffectComposer, RenderPass, EffectPass, BloomEffect, SMAAEffect, ToneMappingEffect, ToneMappingMode,
   VignetteEffect, NoiseEffect, BlendFunction, HueSaturationEffect, BrightnessContrastEffect } from 'postprocessing';
 import { N8AOPostPass } from 'n8ao';
-import { loadWorld, loadMaterials, buildTerrain, buildTrackRibbon, buildLava, buildRocks, setAniso } from './world.js';
+import { loadWorld, loadMaterials, buildTerrain, buildTrackRibbon, buildLava, setAniso } from './world.js';
 import { buildSky, buildPlume, buildAsh, Dust } from './fx.js';
 import { buildProps } from './props.js';
 import { Game } from './game.js';

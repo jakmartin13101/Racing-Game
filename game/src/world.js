@@ -4,10 +4,13 @@ const BASE = import.meta.env.BASE_URL;
 
 export async function loadWorld() {
   const [hb, track] = await Promise.all([
-    fetch(`${BASE}world/height.bin`).then((r) => r.arrayBuffer()),
+    fetch(`${BASE}world/height.u16`).then((r) => r.arrayBuffer()),
     fetch(`${BASE}world/track.json`).then((r) => r.json()),
   ]);
-  const heights = new Float32Array(hb);
+  const raw = new Uint16Array(hb);
+  const heights = new Float32Array(raw.length);
+  const k = (track.hmax - track.hmin) / 65535;
+  for (let i = 0; i < raw.length; i++) heights[i] = track.hmin + raw[i] * k;
   const g = track.grid;
   const res = track.extent / (g - 1);
   const half = track.extent / 2;
@@ -130,6 +133,7 @@ export function buildTerrain(world, M, quality) {
     scoA: { value: M.sco.a }, scoN: { value: M.sco.n }, scoO: { value: M.sco.o },
     basA: { value: M.bas.a }, basN: { value: M.bas.n }, basO: { value: M.bas.o },
     lavA: { value: M.lava.a }, lavN: { value: M.lava.n }, tDetail: { value: M.detail },
+    brA: { value: M.burnt.a }, brN: { value: M.burnt.n }, brO: { value: M.burnt.o },
     uExtent: { value: extent },
   };
   mat.onBeforeCompile = (sh) => {
@@ -140,7 +144,7 @@ export function buildTerrain(world, M, quality) {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
 varying vec3 vW;
-uniform sampler2D tNH, tMask, ashA, ashN, ashO, scoA, scoN, scoO, basA, basN, basO, lavA, lavN, tDetail;
+uniform sampler2D tNH, tMask, ashA, ashN, ashO, scoA, scoN, scoO, basA, basN, basO, lavA, lavN, tDetail, brA, brN, brO;
 uniform float uExtent;
 ${GLSL_COMMON}
 vec3 gN; float gAO; vec3 gEm;`)
@@ -158,18 +162,22 @@ vec2 uvS = vW.xz / 3.0;
 vec2 uvA = vW.xz / 6.0;
 vec4 sA = texAT(scoA, uvS, nz.g); vec4 sO = texAT(scoO, uvS, nz.g); vec3 sN = unpackN(texAT(scoN, uvS, nz.g));
 vec4 aA = texAT(ashA, uvA, nz.b); vec4 aO = texAT(ashO, uvA, nz.b); vec3 aN = unpackN(texAT(ashN, uvA, nz.b));
-// grey wind-blown ash higher up the cone
-float hAsh = smoothstep(120.0, 260.0, vW.y + nz.r * 80.0);
-vec3 ashGrey = vec3(dot(sA.rgb, vec3(0.3,0.5,0.2))) * vec3(1.05, 1.0, 0.96) * 1.25;
-sA.rgb *= vec3(0.42, 0.38, 0.35);
-vec3 groundA = mix(sA.rgb, ashGrey, hAsh * 0.6);
-// patches of compacted ash dirt break up the cinder
-float patchW = smoothstep(0.55, 0.75, nz.r * 0.7 + nz2.g * 0.5);
-float wRoad = smoothstep(0.05, 0.6, msk.g);
-float wDirt = max(patchW * 0.7, wRoad);
-groundA = mix(groundA, aA.rgb, wDirt);
-vec3 groundN = normalize(mix(sN, aN, wDirt));
-vec2 groundRO = mix(sO.rg, aO.rg, wDirt);
+// black cinder gravel and burnt ash ground in large patches
+vec4 bbA = texAT(brA, vW.xz / 4.0, nz.b); vec4 bbO = texAT(brO, vW.xz / 4.0, nz.b); vec3 bbN = unpackN(texAT(brN, vW.xz / 4.0, nz.b));
+sA.rgb *= vec3(0.5, 0.46, 0.43);
+float pB = smoothstep(0.4, 0.62, nz.r * 0.8 + nz2.g * 0.35);
+vec3 groundA = mix(sA.rgb, bbA.rgb * vec3(0.8, 0.75, 0.72), pB);
+vec3 gN0 = normalize(mix(sN, bbN, pB));
+vec2 gRO0 = mix(sO.rg, bbO.rg, pB);
+// darker wind-packed ash on the upper cone with rust-red oxidised streaks
+float hAsh = smoothstep(150.0, 320.0, vW.y + nz.r * 80.0);
+float lum = dot(groundA, vec3(0.3, 0.55, 0.15));
+vec3 coneC = mix(vec3(lum) * vec3(0.92, 0.86, 0.82), vec3(lum) * vec3(1.5, 0.85, 0.6), smoothstep(0.55, 0.8, nz2.r) * 0.7);
+groundA = mix(groundA, coneC, hAsh * 0.7);
+float wRoad = smoothstep(0.05, 0.6, msk.g) * (1.0 - smoothstep(0.08, 0.2, slope));
+groundA = mix(groundA, aA.rgb * 0.8, wRoad);
+vec3 groundN = normalize(mix(gN0, aN, wRoad));
+vec2 groundRO = mix(gRO0, aO.rg, wRoad);
 
 // triplanar basalt on steep faces
 vec3 bw = pow(abs(Ng), vec3(4.0)); bw /= (bw.x + bw.y + bw.z);
@@ -182,18 +190,19 @@ tnX = vec3(tnX.xy + Ng.zy, abs(tnX.z) * Ng.x);
 tnY = vec3(tnY.xy + Ng.xz, abs(tnY.z) * Ng.y);
 tnZ = vec3(tnZ.xy + Ng.xy, abs(tnZ.z) * Ng.z);
 vec3 rockN = normalize(tnX.zyx * bw.x + tnY.xzy * bw.y + tnZ.xyz * bw.z);
-float wRock = smoothstep(0.22, 0.42, slope + (nz2.r - 0.5) * 0.18) * (1.0 - wRoad);
+float wRock = smoothstep(0.13, 0.3, slope + (nz2.r - 0.5) * 0.16) * (1.0 - wRoad);
+bA *= mix(vec3(1.0), vec3(1.35, 0.8, 0.62), smoothstep(0.5, 0.8, nz.g) * 0.6);
 
 // scorched crust near lava
 vec2 uvL = vW.xz / 10.0;
 float wBurn = smoothstep(0.1, 0.8, msk.b + (nz2.b - 0.5) * 0.3);
-vec3 lA = texture(lavA, uvL).rgb;
-vec3 lN = unpackN(texture(lavN, uvL));
+vec3 lA = bbA.rgb * 0.45;
+vec3 lN = bbN;
 
 vec3 albedo = mix(groundA, bA, wRock);
 albedo = mix(albedo, lA, wBurn * (1.0 - wRoad));
 // macro tonal variation so the slopes don't read flat at distance
-albedo *= mix(0.78, 1.12, nz.g) * mix(0.9, 1.06, nz2.r);
+albedo *= mix(0.75, 1.15, nz.g) * mix(0.88, 1.08, nz2.r);
 
 vec3 topN = groundN;
 topN = normalize(mix(topN, lN, wBurn * (1.0 - wRoad)));
@@ -206,7 +215,7 @@ gN = wN;
 vec2 ro = mix(groundRO, bO, wRock);
 gAO = ro.r;
 // lava light bounce on nearby ground
-gEm = vec3(1.0, 0.3, 0.05) * pow(msk.r, 6.0) * 0.5;
+gEm = vec3(1.0, 0.26, 0.04) * (pow(msk.r, 6.0) * 0.1 + pow(msk.r, 14.0) * 0.8);
 diffuseColor.rgb = albedo;
 `)
       .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = clamp(ro.g, 0.3, 1.0);')
@@ -341,7 +350,7 @@ reflectedLight.indirectDiffuse *= rAO;`);
 export function buildLava(world, M) {
   const group = new THREE.Group();
   const lavaUniforms = {
-    uTime: { value: 0 }, lavA: { value: M.lava.a }, lavN: { value: M.lava.n }, tHeat: { value: M.heat },
+    uTime: { value: 0 }, lavA: { value: M.lava.a }, lavN: { value: M.lava.n }, tHeat: { value: M.heat }, tMolten: { value: M.molten },
     tNoise: { value: M.noise },
   };
   const makeMat = (flowing) => {
@@ -354,7 +363,7 @@ export function buildLava(world, M) {
       sh.fragmentShader = sh.fragmentShader
         .replace('#include <common>', `#include <common>
 varying vec3 vW; varying vec2 vT;
-uniform float uTime; uniform sampler2D lavA, lavN, tHeat;
+uniform float uTime; uniform sampler2D lavA, lavN, tHeat, tMolten;
 ${GLSL_COMMON}
 vec3 lavaEm; vec3 lavaN;
 vec3 blackbody(float t) {
@@ -367,17 +376,18 @@ ${flowing
     ? 'vec2 uv1 = vec2(vT.x / 14.0 - uTime * 0.05, vT.y / 14.0); vec2 uv2 = vec2(vT.x / 9.0 - uTime * 0.085, vT.y / 9.0 + 0.3);'
     : 'vec2 uv1 = vW.xz / 18.0 + vec2(uTime * 0.006, 0.0); vec2 uv2 = vW.xz / 11.0 - vec2(0.0, uTime * 0.01);'}
 vec3 nz = texture(tNoise, vW.xz / 90.0 + uTime * 0.003).rgb;
-float h1 = texture(tHeat, uv1).r, h2 = texture(tHeat, uv2 * 1.3).r;
-float hot = max(h1, h2 * 0.85);
-// open molten areas where the crust has broken up
-float molten = smoothstep(0.5, 0.75, nz.g + ${flowing ? '0.12' : '0.0'});
-float heat = clamp(hot + molten * 0.9, 0.0, 1.0);
-float pulse = 0.85 + 0.15 * sin(uTime * 1.7 + nz.r * 12.0);
+vec3 nzb = texture(tNoise, vW.xz / 25.0 - uTime * 0.004).rgb;
+float e1 = texture(tHeat, uv1).r, e2 = texture(tHeat, uv2 * 1.3).r;
+float hot = max(e1, e2 * 0.8);
+// open molten channels where the crust has broken up
+float molten = smoothstep(0.58, 0.72, nz.g * 0.75 + nzb.r * 0.4 + ${flowing ? '0.05' : '-0.05'});
+float pulse = 0.85 + 0.15 * sin(uTime * 1.3 + nz.r * 12.0);
 vec3 crust = texture(lavA, uv1).rgb;
-diffuseColor.rgb = mix(crust, vec3(0.05), molten);
-lavaEm = blackbody(heat) * heat * 9.0 * pulse;
+vec3 melt = texture(tMolten, uv2 * 0.6).rgb;
+diffuseColor.rgb = mix(crust * 0.6, melt * 0.15, molten);
+lavaEm = (vec3(1.0, 0.32, 0.05) * pow(hot, 1.5) * 2.6 + melt * vec3(1.2, 0.75, 0.45) * molten * 3.2) * pulse;
 lavaN = unpackN(texture(lavN, uv1));
-lavaN = normalize(mix(lavaN, vec3(0,0,1), molten));
+lavaN = normalize(mix(lavaN, vec3(0,0,1), molten * 0.7));
 `)
         .replace('#include <normal_fragment_maps>', 'normal = normalize((viewMatrix * vec4(topToWorld(lavaN, vec3(0,1,0)), 0.0)).xyz);')
         .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += lavaEm;');

@@ -42,10 +42,8 @@ const hemi = new THREE.HemisphereLight(0x9fb2c8, 0x3a2a20, 0.1);
 scene.add(hemi);
 
 const world = await loadWorld();
-console.log('stage', 'const world = await load', performance.now() | 0);
 const M = loadMaterials();
 const terrain = buildTerrain(world, M, quality);
-console.log('stage', 'const terrain = buildTer', performance.now() | 0);
 scene.add(terrain);
 const ribbon = buildTrackRibbon(world, M);
 scene.add(ribbon);
@@ -61,10 +59,9 @@ const dust = new Dust(M);
 dust.mat.uniforms.uSun.value.copy(sun);
 scene.add(dust.mesh);
 const props = await buildProps(world, scene, M, quality);
-console.log('stage', 'const props = await buil', performance.now() | 0);
 
 // lava light: warm fill that follows the camera, scaled by proximity to lava
-const lavaLight = new THREE.PointLight(0xff5a1a, 0, 60, 1.6);
+const lavaLight = new THREE.PointLight(0xff5a1a, 0, 45, 2);
 scene.add(lavaLight);
 
 // ---------------------------------------------------------------- post-processing
@@ -80,9 +77,9 @@ if (quality.ao) {
   composer.addPass(ao);
 }
 const bloom = new BloomEffect({ intensity: 1.1, luminanceThreshold: 1.0, luminanceSmoothing: 0.25, mipmapBlur: true, radius: 0.7 });
-const tone = new ToneMappingEffect({ mode: ToneMappingMode.AGX });
-const grade = new HueSaturationEffect({ saturation: 0.12 });
-const contrast = new BrightnessContrastEffect({ contrast: 0.1, brightness: 0.0 });
+const tone = new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC });
+const grade = new HueSaturationEffect({ saturation: 0.05 });
+const contrast = new BrightnessContrastEffect({ contrast: 0.12, brightness: -0.02 });
 const vignette = new VignetteEffect({ darkness: 0.45, offset: 0.3 });
 const grain = new NoiseEffect({ blendFunction: BlendFunction.OVERLAY, premultiply: false });
 grain.blendMode.opacity.value = 0.06;
@@ -99,7 +96,6 @@ addEventListener('resize', () => {
 // ---------------------------------------------------------------- game
 const game = new Game({ world, scene, camera, renderer, dust, M, params, mobile });
 await game.init();
-console.log('stage', 'await game.init();', performance.now() | 0);
 document.getElementById('loading').remove();
 
 const clock = new THREE.Clock();
@@ -125,7 +121,7 @@ function frame() {
   sunLight.position.copy(tmp).addScaledVector(sun, 400);
   const lp = game.nearestLava(camera.position);
   lavaLight.position.copy(lp.pos);
-  lavaLight.intensity = lp.strength * 900;
+  lavaLight.intensity = lp.strength * 120;
   composer.render(dt);
   if (!still) requestAnimationFrame(frame);
 }

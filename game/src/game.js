@@ -147,6 +147,7 @@ export class Game {
   }
 
   resetTo(i) {
+    this.resets = (this.resets || 0) + 1;
     const c = this.world.track.centre;
     const n = c.length;
     const p = c[i % n], q = c[(i + 4) % n];
@@ -333,6 +334,7 @@ export class Game {
       }
     }
     this.hud.time.textContent = fmt(L.t);
+    window.__state = { i: this.trackI, t: L.t, resets: this.resets, max: L.max, y: p.y, done: L.done, best: L.best };
     const v = this.body.linvel();
     this.hud.speed.textContent = Math.round(Math.hypot(v.x, v.y, v.z) * 3.6);
     this.hud.boost.style.width = `${Math.round(this.boost * 100)}%`;

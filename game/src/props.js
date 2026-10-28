@@ -100,7 +100,7 @@ export async function buildProps(world, scene, M, quality) {
     put(rocks[Math.floor(rnd() * rocks.length)], x, z, rnd() * 6.28, 1.2 + Math.pow(rnd(), 4) * 16, { align: 0.7, sink: 0.15, tilt: 0.5 });
   }
   // big cliff outcrops lining cuttings
-  for (let i = 0; i < n; i += 37) {
+  for (let i = 0; i < (quality.cliffs ? n : 0); i += 37) {
     const f = frame(i);
     for (const side of [-1, 1]) {
       const lat = side * (W / 2 + 14 + rnd() * 25);

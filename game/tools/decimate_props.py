@@ -4,13 +4,14 @@ import os
 import sys
 import bpy
 
+SRC = os.path.join(os.environ.get('ASSETS', '/tmp/assets'), 'polyhaven', 'models')
 ENV = os.path.join(os.path.dirname(__file__), '..', 'public', 'models', 'env')
 BUDGET = {'boulder_01': 3000, 'namaqualand_boulder_02': 3500, 'namaqualand_cliff_02': 9000, 'rock_09': 2500,
-          'concrete_road_barrier': 1200, 'metal_jerrycan': 1500, 'rusted_wheel_rim_02': 2500, 'modular_chainlink_fence': 6000,
+          'concrete_road_barrier': 1200, 'metal_jerrycan': 1500, 'rusted_wheel_rim_02': 2500,
           'Barrel_01': 3000, 'barrel_03': 3000, 'old_tyre': 3000, 'propane_tank': 3000, 'wooden_crate_02': 3000}
 for name, budget in BUDGET.items():
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    bpy.ops.import_scene.gltf(filepath=f'{ENV}/{name}/{name}_2k.gltf')
+    bpy.ops.import_scene.gltf(filepath=f'{SRC}/{name}/{name}_2k.gltf')
     meshes = [o for o in bpy.context.scene.objects if o.type == 'MESH']
     tris = sum(sum(len(p.vertices) - 2 for p in o.data.polygons) for o in meshes)
     ratio = min(1.0, budget / max(tris, 1))

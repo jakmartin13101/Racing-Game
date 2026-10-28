@@ -1,6 +1,0 @@
-Modular Chainlink Fence (modular_chainlink_fence)
-Source: https://polyhaven.com/a/modular_chainlink_fence
-Author(s): James Ray Cock, Amal Kumar
-License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
-Type: model
-Files: modular_chainlink_fence_2k.gltf, textures/modular_chainlink_fence_wire_nor_gl_2k.jpg, modular_chainlink_fence.bin, textures/modular_chainlink_fence_wire_arm_2k.jpg, textures/modular_chainlink_fence_posts_arm_2k.jpg, textures/modular_chainlink_fence_wire_diff_2k.jpg, textures/modular_chainlink_fence_posts_diff_2k.jpg, textures/modular_chainlink_fence_posts_nor_gl_2k.jpg

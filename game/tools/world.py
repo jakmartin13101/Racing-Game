@@ -85,7 +85,7 @@ cone -= gul * flank * (cone * 0.03 + 2.5)
 lobes = np.maximum(spectral(2.4, 3, seed=20), 0) ** 1.5 * 9 * (1 - ss(300, 1100, R))
 # rolling plain and distant ridges
 plain = spectral(2.8, 1, seed=30) * 22 + spectral(2.0, 6, seed=31) * 4
-ridges = gaussian_filter(np.clip(1 - np.abs(spectral(2.6, 2, seed=32)) * 0.6, 0, 1) ** 3, 5) * 180 * ss(1050, 1500, R)
+ridges = gaussian_filter(np.clip(1 - np.abs(spectral(2.6, 2, seed=32)) * 0.6, 0, 1) ** 3, 14) * 130 * ss(1050, 1500, R)
 fine = spectral(1.8, 40, seed=33) * 0.9
 H = cone + lobes + plain + ridges + fine
 H -= sample(H, np.array([0.0]), np.array([900.0]))[0] * 0  # keep absolute
@@ -111,9 +111,9 @@ def meander(angle_deg, r0, r1, seed, wiggle=0.12):
 
 
 rivers = [
-    dict(path=meander(18, 150, 760, 5), w=16),    # east flow, crosses track
-    dict(path=meander(147, 150, 390, 6), w=12),   # west flow
-    dict(path=meander(262, 150, 300, 7), w=9),    # north-west thin flow
+    dict(path=meander(18, 150, 760, 5), w=26),    # east flow, crosses track
+    dict(path=meander(147, 150, 390, 6), w=20),   # west flow
+    dict(path=meander(262, 150, 300, 7), w=15),    # north-west thin flow
 ]
 lake_c = np.array([219.0, 601.0])
 lake_r = 70.0
@@ -268,7 +268,10 @@ burn = np.clip(1 - lava_dist / 25.0, 0, 1)
 m = np.stack([glow, road, burn], -1)
 Image.fromarray((m * 255).astype(np.uint8)).resize((2048, 2048), Image.BILINEAR).save(f'{OUT}/masks.png')
 
-H.astype(np.float32).tofile(f'{OUT}/height.bin')
+hmin, hmax = float(H.min()), float(H.max())
+np.round((H - hmin) / (hmax - hmin) * 65535).astype('<u2').tofile(f'{OUT}/height.u16')
+if os.path.exists(f'{OUT}/height.bin'):
+    os.remove(f'{OUT}/height.bin')
 
 # start grid: 40 m after index 0 heading along +s
 start_i = 30
@@ -279,7 +282,7 @@ track = dict(
     start=start_i, jump=cross,
     rivers=riv_out,
     lake=dict(x=float(lake_c[0]), z=float(lake_c[1]), r=lake_r, y=lake_level),
-    peak=PEAK,
+    peak=PEAK, hmin=hmin, hmax=hmax,
 )
 json.dump(track, open(f'{OUT}/track.json', 'w'))
 

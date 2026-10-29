@@ -455,19 +455,27 @@ export class MotionBlurEffect extends Effect {
   constructor(samples = 10) {
     super('MotionBlurEffect', /* glsl */`
       uniform mat4 uInvProj, uCamWorld, uPrevVP;
-      uniform float uAmount, uRadial, uAber;
-      void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth, out vec4 outputColor) {
-        vec4 ndc = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+      uniform float uAmount, uRadial, uAber, uHaze, uTime;
+      void mainImage(const in vec4 inputColor, const in vec2 uvIn, const in float depth, out vec4 outputColor) {
+        // heat shimmer over hot ground: a small wobble of the image, strongest low in the frame and far away
+        vec2 uv = uvIn;
+        if (uHaze > 0.001) {
+          float w = uHaze * smoothstep(0.75, 0.25, uvIn.y) * smoothstep(0.96, 0.995, depth);
+          uv += w * 0.0022 * vec2(sin(uvIn.y * 160.0 + uTime * 7.0) + 0.5 * sin(uvIn.x * 93.0 - uTime * 5.0),
+                                  cos(uvIn.x * 120.0 + uTime * 6.0));
+        }
+        vec4 base = uHaze > 0.001 ? texture2D(inputBuffer, uv) : inputColor;
+        vec4 ndc = vec4(uvIn * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
         vec4 view = uInvProj * ndc; view /= view.w;
         vec4 world = uCamWorld * view;
         vec4 prev = uPrevVP * world;
         vec2 prevUv = prev.xy / prev.w * 0.5 + 0.5;
-        vec2 vel = (uv - prevUv) * uAmount;
+        vec2 vel = (uvIn - prevUv) * uAmount;
         vec2 d = uv - vec2(0.5, 0.46);
         vel += d * uRadial * smoothstep(0.1, 0.6, length(d));
         float L = length(vel);
         if (L > 0.07) vel *= 0.07 / L;
-        vec3 acc = inputColor.rgb; float w = 1.0;
+        vec3 acc = base.rgb; float w = 1.0;
         if (L > 0.0008) {
           for (int i = 1; i < SAMPLES; i++) {
             float t = float(i) / float(SAMPLES - 1) - 0.5;
@@ -480,14 +488,14 @@ export class MotionBlurEffect extends Effect {
           c.r = mix(c.r, texture2D(inputBuffer, uv - o).r, 0.7);
           c.b = mix(c.b, texture2D(inputBuffer, uv + o).b, 0.7);
         }
-        outputColor = vec4(c, inputColor.a);
+        outputColor = vec4(c, base.a);
       }`, {
       attributes: EffectAttribute.CONVOLUTION | EffectAttribute.DEPTH,
       defines: new Map([['SAMPLES', String(samples)]]),
       uniforms: new Map([
         ['uInvProj', new THREE.Uniform(new THREE.Matrix4())], ['uCamWorld', new THREE.Uniform(new THREE.Matrix4())],
         ['uPrevVP', new THREE.Uniform(new THREE.Matrix4())], ['uAmount', new THREE.Uniform(0)],
-        ['uRadial', new THREE.Uniform(0)], ['uAber', new THREE.Uniform(0)],
+        ['uRadial', new THREE.Uniform(0)], ['uAber', new THREE.Uniform(0)], ['uHaze', new THREE.Uniform(0)], ['uTime', new THREE.Uniform(0)],
       ]),
     });
     this.prevVP = new THREE.Matrix4();

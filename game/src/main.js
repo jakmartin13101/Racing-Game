@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import { EffectComposer, RenderPass, EffectPass, BloomEffect, SMAAEffect, ToneMappingEffect, ToneMappingMode,
-  VignetteEffect, NoiseEffect, BlendFunction, HueSaturationEffect, BrightnessContrastEffect } from 'postprocessing';
+  VignetteEffect, NoiseEffect, BlendFunction, SMAAPreset, HueSaturationEffect, BrightnessContrastEffect } from 'postprocessing';
 import { N8AOPostPass } from 'n8ao';
 import { loadWorld, loadMaterials, buildTerrain, buildTrackRibbon, buildLava, setAniso } from './world.js';
 import { buildSky, buildPlume, buildAsh, Dust, CrashFx, MotionBlurEffect } from './fx.js';
 import { Hazards } from './hazards.js';
+import { patchHeightFog, SunShafts, Focus, SkidMarks } from './ultra.js';
 import { Debris, Breakables } from './crash.js';
 import { buildProps } from './props.js';
 import { buildVillage } from './village.js';
@@ -33,20 +34,26 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 setAniso(Math.min(renderer.capabilities.getMaxAnisotropy(), quality.terrainStep > 3 ? 4 : 16));
+const ULTRA = !!quality.ultra;
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.25, 9000);
 
 loadStep(0.05, 'LOADING SKY…');
 const { sun } = await buildSky(renderer, scene);
+// Ultra: ash haze that pools in the valleys and glows towards the sun (patches shaders before any compile)
+if (ULTRA && !params.has('nofog')) patchHeightFog(sun);
 const fogColor = new THREE.Color(0.62, 0.64, 0.66);
 scene.fog = new THREE.FogExp2(fogColor, 0.00028);
 
 const sunLight = new THREE.DirectionalLight(0xfff0dc, 2.8);
 sunLight.castShadow = true;
-sunLight.shadow.mapSize.set(quality.shadow, quality.shadow);
+const shadowRes = Math.min(quality.shadow, renderer.capabilities.maxTextureSize);
+sunLight.shadow.mapSize.set(shadowRes, shadowRes);
 const sc = sunLight.shadow.camera;
-sc.left = -70; sc.right = 70; sc.top = 70; sc.bottom = -70; sc.near = 1; sc.far = 900;
+const SR = quality.shadowRange || 70;
+sc.left = -SR; sc.right = SR; sc.top = SR; sc.bottom = -SR; sc.near = 1; sc.far = 900;
+if (ULTRA) sunLight.shadow.radius = 2;
 sunLight.shadow.bias = -0.0004;
 sunLight.shadow.normalBias = 0.04;
 scene.add(sunLight, sunLight.target);
@@ -82,7 +89,8 @@ addStaticBoxes(phys, village.colliders);
 const debris = new Debris(phys);
 const breakables = new Breakables(phys, debris, [...props.handles, ...village.handles]);
 const crashFx = new CrashFx(M, scene, sun, !!quality.aiLod);
-const crash = { scene, debris, fx: crashFx, breakables, detail: quality.damageDetail };
+const skids = new SkidMarks(scene, params.has('noskid') ? 1 : quality.skids || 1000);
+const crash = { scene, debris, fx: crashFx, breakables, detail: quality.damageDetail, skids };
 scene.add(camera);
 loadStep(0.8, 'LOADING TRUCKS…');
 const assets = await loadTruckAssets(renderer);
@@ -110,8 +118,9 @@ if (quality.ao) {
   ao.configuration.aoRadius = 2.5;
   ao.configuration.distanceFalloff = 1.2;
   ao.configuration.intensity = 2.2;
-  ao.configuration.halfRes = true;
+  ao.configuration.halfRes = !quality.aoUltra;
   ao.configuration.gammaCorrection = false;
+  if (quality.aoUltra) { ao.setQualityMode('Ultra'); ao.configuration.halfRes = false; }
   composer.addPass(ao);
 }
 const bloom = new BloomEffect({ intensity: 1.1, luminanceThreshold: 1.0, luminanceSmoothing: 0.25, mipmapBlur: true, radius: 0.7 });
@@ -121,10 +130,13 @@ const contrast = new BrightnessContrastEffect({ contrast: 0.12, brightness: -0.0
 const vignette = new VignetteEffect({ darkness: 0.45, offset: 0.3 });
 const grain = new NoiseEffect({ blendFunction: BlendFunction.OVERLAY, premultiply: false });
 grain.blendMode.opacity.value = 0.06;
-composer.addPass(new EffectPass(camera, bloom));
+// Ultra adds sun shafts through the ash and depth of field to the bloom pass
+const shafts = ULTRA && !params.has('noshafts') ? new SunShafts(camera, sun) : null;
+const focusFx = ULTRA && !params.has('nodof') ? new Focus(camera) : null;
+composer.addPass(new EffectPass(camera, ...(focusFx ? [focusFx.effect] : []), bloom, ...(shafts ? [shafts.effect] : [])));
 const mblur = new MotionBlurEffect(quality.blurSamples);
 composer.addPass(new EffectPass(camera, mblur));
-composer.addPass(new EffectPass(camera, tone, grade, contrast, vignette, grain, new SMAAEffect()));
+composer.addPass(new EffectPass(camera, tone, grade, contrast, vignette, grain, new SMAAEffect({ preset: ULTRA ? SMAAPreset.ULTRA : SMAAPreset.MEDIUM })));
 
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
@@ -151,7 +163,7 @@ if (S.touchUi && S.touchSteer === 'tilt') input.enableTilt();
 let race = null, raceCfg = null, state = 'menu', menuT = 0;
 const hud = {
   root: $('hud'), pos: $('pos'), poscount: $('poscount'), lap: $('lap'), laps: $('laps'), lapline: $('lapline'), track: $('trackname'),
-  time: $('time'), best: $('best'), speed: $('speed'), boost: $('boostbar'), dmg: $('dmgbar'), boostWrap: $('boost'), msg: $('msg'), board: $('board'), map: $('map'), fps: $('fps'), toast: $('toast'),
+  time: $('time'), best: $('best'), speed: $('speed'), gear: $('gear'), rpm: $('rpmbar'), boost: $('boostbar'), dmg: $('dmgbar'), boostWrap: $('boost'), msg: $('msg'), board: $('board'), map: $('map'), fps: $('fps'), toast: $('toast'),
 };
 let mapBase = null, mapFn = null;
 
@@ -202,6 +214,7 @@ function toMenu() {
 function startRace(cfg) {
   raceCfg = cfg;
   race?.dispose();
+  skids.clear();
   const track = trackById(cfg.track);
   race = new Race({
     phys, scene, assets, track, opponents: cfg.opponents, difficulty: cfg.difficulty, laps: cfg.laps,
@@ -261,6 +274,8 @@ function updateHud(dt) {
   hud.dmg.style.width = `${Math.round((st.v.damage?.level || 0) * 100)}%`;
   hud.boostWrap.classList.toggle('red', st.v.boost < 0.1);
   hud.speed.textContent = Math.round(st.v.speed() * 3.6);
+  hud.gear.textContent = st.v.speed() < 1 && st.v.input.brake > 0 ? 'R' : st.v.gear;
+  hud.rpm.style.width = `${Math.round(Math.min(1, st.v.rpm / 7000) * 100)}%`;
   hud.boost.style.width = `${Math.round(st.v.boost * 100)}%`;
   // running order, top four plus the player
   let html = '';
@@ -388,6 +403,11 @@ function frame(real) {
   const lp = nearestLava(camera.position);
   lavaLight.position.copy(lp.pos);
   lavaLight.intensity = lp.strength * 120;
+  // heat shimmer near lava (Ultra)
+  mblur.uniforms.get('uHaze').value = ULTRA ? Math.min(1.2, lp.strength * 1.6 + (race?.hazards?.lava?.front.value > 0 ? 0.3 : 0)) : 0;
+  mblur.uniforms.get('uTime').value = t;
+  if (shafts) shafts.update(camera);
+  if (focusFx) focusFx.update(race && state !== 'menu' ? race.player.v.group.position : focus, !!rig.cine, race ? rig.mode : 'menu');
   mblur.track(camera, blurAmt);
   composer.render(dt);
   if (S.showFps) { fpsAvg += (1 / Math.max(real, 1e-3) - fpsAvg) * 0.05; hud.fps.textContent = `${Math.round(fpsAvg)} FPS`; }
@@ -428,7 +448,7 @@ if (still) {
       dmg: +(c.v.damage?.level || 0).toFixed(2), lost: [...(c.v.damage?.lost || [])].join(','), blown: !!c.v.damage?.blown, log: (c.v.damage?.log || []).join(' ') })),
     hz: race.hazards && { bombs: race.hazards.bombs.length, marks: race.hazards.marks.length, boulders: race.hazards.boulders.length, rolled: race.hazards.nBoulders || 0, dropped: race.hazards.nBombs || 0, lava: race.hazards.lava?.state, hits: race.hazards.hits || 0 },
     knocked: breakables.items.filter((i) => i.state !== 'static').length, props: breakables.items.length, debris: debris.list.length };
-  window.__race = race; window.__fx = crashFx;
+  window.__race = race; window.__fx = crashFx; window.__skids = skids;
   window.__ready = true;
 } else {
   window.__ready = true;

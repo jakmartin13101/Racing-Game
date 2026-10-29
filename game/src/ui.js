@@ -210,7 +210,7 @@ export class UI {
       rows.append(row);
       this.seg(row.lastChild, values, () => this.s[key], (v) => { this.save({ [key]: v }); after?.(v); }, labels);
     };
-    add('Graphics', platform.desktopApp ? 'High is the desktop default' : 'Browser and phone builds default lower', ['low', 'medium', 'high'], ['Low', 'Medium', 'High'], 'quality',
+    add('Graphics', platform.desktopApp ? 'High is the desktop default; Ultra needs a powerful graphics card' : 'Browser and phone builds default lower; Ultra needs a powerful graphics card', ['low', 'medium', 'high', 'ultra'], ['Low', 'Medium', 'High', 'Ultra'], 'quality',
       () => { $('setnote').textContent = 'Graphics change applies after a reload.'; this.h.onQualityChange?.(); });
     add('Frame rate', 'Cap saves battery on phones and laptops', [30, 60, 0], ['30', '60', 'Max'], 'fps', (v) => this.h.onFps?.(v));
     add('Camera', 'C key, Y button or CAM to cycle in a race', CAMERAS.map((c) => c.id), CAMERAS.map((c) => c.name), 'camera', (v) => this.h.onCamera?.(v));

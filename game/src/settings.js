@@ -13,9 +13,13 @@ export const platform = (() => {
 
 // Graphics presets. Browser and phone builds run lighter and capped at 30 fps; the desktop app goes full quality.
 export const PRESETS = {
-  low: { terrainStep: 4, fieldRocks: 220, shadow: 1024, ao: false, pixelRatio: 1.25, aiLod: true, bloom: true, damageDetail: 0.4, blurSamples: 6 },
-  medium: { terrainStep: 3, fieldRocks: 450, shadow: 2048, ao: false, pixelRatio: 1.5, aiLod: true, bloom: true, damageDetail: 0.7, blurSamples: 8 },
-  high: { terrainStep: 2, fieldRocks: 700, shadow: 4096, ao: true, pixelRatio: 2, aiLod: false, bloom: true, damageDetail: 1, blurSamples: 12 },
+  low: { terrainStep: 4, fieldRocks: 220, shadow: 1024, ao: false, pixelRatio: 1.25, aiLod: true, bloom: true, damageDetail: 0.4, blurSamples: 6, skids: 600 },
+  medium: { terrainStep: 3, fieldRocks: 450, shadow: 2048, ao: false, pixelRatio: 1.5, aiLod: true, bloom: true, damageDetail: 0.7, blurSamples: 8, skids: 1200 },
+  high: { terrainStep: 2, fieldRocks: 700, shadow: 4096, ao: true, pixelRatio: 2, aiLod: false, bloom: true, damageDetail: 1, blurSamples: 12, skids: 2000 },
+  // for a strong graphics card: finer terrain, supersampling, long sharp shadows, full-resolution AO, height fog,
+  // sun shafts, depth of field, heat haze and physics stepped at 120 Hz
+  ultra: { terrainStep: 1.25, fieldRocks: 1500, shadow: 8192, shadowRange: 110, ao: true, aoUltra: true, pixelRatio: 2, minPixelRatio: 1.5,
+    aiLod: false, bloom: true, damageDetail: 1, blurSamples: 16, skids: 4000, ultra: true, substeps: 2 },
 };
 
 function defaults() {
@@ -58,6 +62,8 @@ export function quality() {
   const q = { ...PRESETS[s.quality] };
   const params = new URLSearchParams(location.search);
   if (params.has('ao')) q.ao = params.get('ao') === '1';
-  q.pixelRatio = Math.min(devicePixelRatio, q.pixelRatio);
+  if (params.has('sub')) q.substeps = +params.get('sub');
+  // Ultra renders at least 1.5x the screen resolution and scales down, for clean edges and fine detail
+  q.pixelRatio = Math.max(Math.min(devicePixelRatio, q.pixelRatio), q.minPixelRatio || 0);
   return q;
 }

@@ -14,6 +14,7 @@ export const DRIVERS = [
 export class Race {
   constructor({ phys, scene, assets, track, opponents, difficulty, laps, playerPaint, quality, playerName, seed = 1, crash = null }) {
     Object.assign(this, { phys, scene, track, crash, laps: track.closed ? laps : 1 });
+    this.substeps = quality?.substeps || 1;
     this.eq = new RAPIER.EventQueue(true);
     this.byCollider = new Map();
     this.events = [];
@@ -111,7 +112,8 @@ export class Race {
         if (st.v.totaled) Object.assign(st.v.input, { throttle: 0, brake: 0, boost: 0, hand: 0 });
         if (st.respawn) this.respawn(st, 'S');
       }
-      st.v.step(dt, !racing);
+      // the truck runs on loose ground once its centre is past the edge of the track surface
+      st.v.surface = THREE.MathUtils.clamp(((st.off || 0) - (this.track.width / 2 - 0.6)) / 1.5, 0, 1);
     }
     // trucks knock trackside props flying before the solver sees them
     this.crash?.breakables?.step(this.cars.map((c) => c.v), this.t, (v, dv, p, local, it) => {
@@ -122,10 +124,16 @@ export class Race {
       if (st?.isPlayer) this.events.push({ type: 'knock', name: it.name, dv });
     });
     this.hazards?.pre(dt, this);
-    for (const st of this.cars) { const v = st.v.body.linvel(); (st.preV ||= new THREE.Vector3()).set(v.x, v.y, v.z); }
-    this.phys.step(this.eq);
+    // Ultra splits each step into substeps: vehicle forces and the solver run at 120 Hz
+    const sub = this.substeps, h = dt / sub;
+    this.phys.timestep = h;
+    for (let k = 0; k < sub; k++) {
+      for (const st of this.cars) st.v.step(h, !racing);
+      for (const st of this.cars) { const v = st.v.body.linvel(); (st.preV ||= new THREE.Vector3()).set(v.x, v.y, v.z); }
+      this.phys.step(this.eq);
+      this.impacts(h);
+    }
     this.hazards?.post(dt, this);
-    this.impacts();
     this.crash?.debris.sync(dt);
 
     for (const st of this.cars) {
@@ -137,7 +145,8 @@ export class Race {
       if (near.d < t.width * 0.6 && st.v.contacts >= 3 && !c[4]) st.lastSafe = near.i;
       // lava, cliffs, far off course, or upside down for two seconds
       if (p.y < c[1] - 6) this.respawn(st, `L${(p.y - c[1]).toFixed(0)}d${near.d.toFixed(0)}`); else if (near.d > 120) this.respawn(st, 'O');
-      if (st.v.up < 0.2 && st.v.speed() < 3) { st.flipT = (st.flipT || 0) + dt; if (st.flipT > 2) this.respawn(st, 'F'); }
+      // upside down, or beached on its side with no wheel on the ground, for a couple of seconds
+      if ((st.v.up < 0.2 || (st.v.up < 0.6 && st.v.contacts <= 1)) && st.v.speed() < 3) { st.flipT = (st.flipT || 0) + dt; if (st.flipT > 2.5) this.respawn(st, 'F'); }
       else st.flipT = 0;
       // lap counting across the line
       const r = t.rel(st.i);
@@ -195,10 +204,10 @@ export class Race {
   }
 
   // hard contacts on the truck bodies: walls, buildings, other trucks, landing on the roof
-  impacts() {
+  impacts(h = 1 / 60) {
     this.eq.drainContactForceEvents((e) => {
       const h1 = e.collider1(), h2 = e.collider2();
-      const dv = e.totalForceMagnitude() / 60 / 2170;
+      const dv = e.totalForceMagnitude() * h / 2170;
       if (dv < 1.4) return;
       for (const [mine, other] of [[h1, h2], [h2, h1]]) {
         const st = this.byCollider.get(mine);

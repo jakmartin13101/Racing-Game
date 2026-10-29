@@ -19,7 +19,7 @@ npm run dist:win   # Windows installer -> release/GravelRiot-Setup.exe (needs ma
 - **World Race**: a three-round championship (Ashfall Village, Summit Sprint, Caldera Loop) with
   10-8-6-5-4-3-2-1 points and standings after each round.
 - **Quick Race**: any track, 0 to 7 opponents, easy / normal / hard AI, lap count, truck paint.
-- **Settings**: graphics preset (low / medium / high), frame-rate cap (30 / 60 / uncapped), camera, touch
+- **Settings**: graphics preset (low / medium / high / ultra), frame-rate cap (30 / 60 / uncapped), camera, touch
   steering style (buttons or tilt), auto-accelerate, steering assist, FPS counter, driver name.
 
 Tracks share one volcano map:
@@ -33,6 +33,19 @@ Tracks share one volcano map:
   Boulders roll off the slopes, and bombs fall on the upper half.
 
 The browser and phones cap at 30 fps and default to lighter graphics; the desktop app runs uncapped at high.
+
+**Ultra** is for a powerful graphics card and is never the default. On top of High it renders at 1.5x
+resolution or more and scales down, uses finer terrain, more rocks, an 8K shadow map over a wider area,
+full-resolution ambient occlusion, height fog that pools in the valleys and glows towards the sun, sun shafts
+through the ash, depth of field, heat shimmer near lava, ultra anti-aliasing and more tyre marks, and steps
+the physics at 120 Hz instead of 60.
+
+## Driving physics
+
+Six-speed sequential gearbox with an rpm-based torque curve, auto shifts with a short power cut, engine
+braking and a rev limiter (gear and rpm on the HUD). Air drag grows with the square of speed. The track
+surface grips best; loose ground off it has about 80% of the grip and drags at the tyres. Tyres leave marks
+when they slide, spin off the line, lock under hard braking or on the handbrake.
 
 ## Controls
 
@@ -60,7 +73,7 @@ Cameras: chase, far chase, hood, bumper and trackside TV.
 `tools/truck/split.py` cuts the breakable parts out of the baked truck models.
 
 URL options: `?race=caldera|village|summit`, `&ai=N`, `&laps=N`, `&diff=easy|normal|hard`, `&cam=...`,
-`?q=low|medium|high`, `?fps=N`, `?auto` (autopilot), `?blow` (force an engine blow), `?at=N&yaw=R&ram=V` (crash test), `?still=N` (render one frame after N simulated steps,
+`?q=low|medium|high|ultra`, `?sub=N` (physics substeps), `?nofog`, `?noshafts`, `?nodof`, `?noskid`, `?fps=N`, `?auto` (autopilot), `?blow` (force an engine blow), `?at=N&yaw=R&ram=V` (crash test), `?still=N` (render one frame after N simulated steps,
 used for headless captures).
 
 ## Code
@@ -68,7 +81,7 @@ used for headless captures).
 `src/main.js` (app state and loop), `world.js` (terrain, materials, lava), `track.js` (track geometry
 queries), `vehicle.js` (truck physics and visuals), `ai.js` (opponent drivers), `race.js` (grid, laps,
 respawns, results), `camera.js` (the TV camera checks its line of sight and moves when terrain or a building gets in the way),
-`hazards.js` (bombs, boulders, the Caldera lava breakout), `damage.js`, `crash.js`, `fx.js` (smoke, fire,
+`hazards.js` (bombs, boulders, the Caldera lava breakout), `ultra.js` (height fog, sun shafts, depth of field, tyre marks), `damage.js`, `crash.js`, `fx.js` (smoke, fire,
 motion blur), `input.js` (keyboard, gamepad, touch, tilt), `ui.js` / `ui.css` (menus,
 HUD), `settings.js` (presets and saved settings), `props.js` and `village.js` (scenery). The desktop
 wrapper is `electron/main.cjs`, and `electron/installer.nsi` builds the installer.

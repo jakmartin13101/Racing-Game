@@ -5,6 +5,7 @@ import { Damage } from './damage.js';
 
 const BASE = import.meta.env.BASE_URL;
 const WHEELS = ['wheel_FL', 'wheel_FR', 'wheel_RL', 'wheel_RR'];
+const _p = new THREE.Vector3(), _r = new THREE.Vector3(), _v = new THREE.Vector3(), _s = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
 
 // Trophy-truck tune. Units: metres, kg, N.
 export const TUNE = {
@@ -15,9 +16,17 @@ export const TUNE = {
   radius: 0.5, rest: 0.6, travel: 0.42,
   stiffness: 34, compression: 3.2, relaxation: 3.8, maxForce: 60000,
   friction: 2.6, side: 1.1,
-  engine: 5600, boost: 4000, brake: 260, reverse: 2600,
+  engine: 6600, boost: 4300, brake: 260, reverse: 2600,
   steerMax: 0.5, topSpeed: 55,
+  // six-speed sequential box: engine rpm from wheel speed, a torque curve peaking mid-range, and a short
+  // power cut on every upshift
+  gears: [3.2, 2.1, 1.5, 1.15, 0.92, 0.76], final: 7.0, idle: 950, redline: 7000, upshift: 6500, downshift: 2900, shiftTime: 0.16,
+  // aerodynamic drag (N per (m/s)^2) and how much grip loose ground keeps compared with the track
+  drag: 0.5, looseGrip: 0.82,
 };
+
+// engine torque against rpm, 1 at the peak (4800 rpm)
+const torqueCurve = (rpm) => THREE.MathUtils.clamp(1 - ((rpm - 4800) / 5200) ** 2 * 1.4, 0.55, 1);
 
 // Collision groups: (membership << 16) | filter. Wheel rays only see the ground, so trucks can't stand on each other's roofs.
 const G_GROUND = (0x0001 << 16) | 0xffff;
@@ -191,6 +200,9 @@ export class Vehicle {
     this.input = { throttle: 0, brake: 0, steer: 0, hand: 0, boost: 0 };
     this.boost = 1;
     this.power = 1;
+    this.gear = 1; this.rpm = TUNE.idle; this.shiftT = 0;
+    // 0 on the track surface, towards 1 on loose ground off it; set by the race each step
+    this.surface = 0;
     this.group = new THREE.Group();
     // full model near the camera, decimated one further out
     this.lod = new THREE.LOD();
@@ -204,6 +216,7 @@ export class Vehicle {
     scene.add(this.group);
     this.createBody();
     this.damage = crash ? new Damage(this, crash) : null;
+    this.skids = crash?.skids || null;
   }
 
   get totaled() { return !!this.damage?.totaled; }
@@ -281,6 +294,22 @@ export class Vehicle {
     this.boosting = boosting;
     this.redline = boosting && this.boost < 0.1;
     if (I.throttle > 0 && !dead) force = T.engine * pw * I.throttle * (1 - Math.min(Math.max(speed, 0) / (T.topSpeed * (0.7 + 0.3 * health) * this.power * (boosting ? 1.25 : 1)), 1) ** 2);
+    // gearbox: rpm follows the road speed in gear (or revs freely in the air); force follows the torque curve
+    const g = this.gear, ratio = T.gears[g - 1] * T.final;
+    const wheelRpm = Math.abs(speed) / T.radius * 60 / (2 * Math.PI);
+    const inAir = this.contacts === 0;
+    const target = inAir ? T.idle + (T.redline - T.idle) * I.throttle : Math.max(T.idle, wheelRpm * ratio);
+    this.rpm += (Math.min(T.redline + 200, target) - this.rpm) * Math.min(1, dt * (inAir ? 6 : 25));
+    this.shiftT = Math.max(0, this.shiftT - dt);
+    if (!inAir && speed > 0.5) {
+      if (this.rpm > T.upshift && g < T.gears.length && I.throttle > 0) { this.gear++; this.shiftT = T.shiftTime; }
+      else if (this.rpm < T.downshift && g > 1) { this.gear--; this.shiftT = T.shiftTime * 0.4; }
+    }
+    if (speed < 2 && g > 1 && !inAir) this.gear = 1;
+    const gearPull = 0.85 + 0.45 * (T.gears[g - 1] - T.gears[T.gears.length - 1]) / (T.gears[0] - T.gears[T.gears.length - 1]);
+    force *= torqueCurve(this.rpm) * gearPull * (this.shiftT > 0 ? 0.15 : 1);
+    // bouncing off the limiter
+    if (this.rpm > T.redline && !boosting) force *= 0.3;
     if (boosting) {
       force += T.boost * (0.6 + 0.4 * health);
       const before = this.boost;
@@ -302,9 +331,17 @@ export class Vehicle {
       vc.setWheelBrake(i, brake * (i < 2 ? 0.6 : 0.4) + (i >= 2 ? I.hand * 40 : 0));
       if (!this.lostWheels?.has(i)) vc.setWheelSideFrictionStiffness(i, i >= 2 && I.hand ? 0.45 : T.side);
     }
-    // rolling resistance when coasting, a little more for a wreck
-    if (!frozen && (dead ? !(I.brake > 0) : !I.throttle && !I.brake)) for (let i = 0; i < 4; i++) vc.setWheelBrake(i, dead ? 7 : 4);
+    // rolling resistance and engine braking when coasting, a little more for a wreck; loose ground drags
+    const loose = this.surface;
+    if (!frozen && (dead ? !(I.brake > 0) : !I.throttle && !I.brake)) {
+      const eb = dead ? 7 : 3 + 5 * (this.rpm / T.redline) * (T.gears[this.gear - 1] / 1.5);
+      for (let i = 0; i < 4; i++) vc.setWheelBrake(i, eb + loose * 4);
+    }
+    // grip: full on the track, less on loose ash and gravel, almost none on a bare hub
+    for (let i = 0; i < 4; i++) if (!this.lostWheels?.has(i)) vc.setWheelFrictionSlip(i, T.friction * (1 - (1 - T.looseGrip) * loose));
     vc.updateVehicle(dt, undefined, RAY_GROUND);
+    // air drag, opposite the motion and growing with the square of the speed
+    if (spd > 1) { const k = -T.drag * spd * dt; this.body.applyImpulse({ x: v.x * k, y: v.y * k * 0.3, z: v.z * k }, true); }
 
     // arcade assists: air control, self-righting, downforce
     const q = this.body.rotation();
@@ -322,6 +359,8 @@ export class Vehicle {
       this.body.applyTorqueImpulse({ x: corr.x * dt, y: corr.y * dt, z: corr.z * dt }, true);
     } else {
       this.body.applyImpulse({ x: 0, y: -spd * spd * 0.9 * dt, z: 0 }, true);
+      // tyres dig into loose ground
+      if (loose > 0 && spd > 1) { const k = -loose * 1500 * dt / spd; this.body.applyImpulse({ x: v.x * k, y: 0, z: v.z * k }, true); }
       const right = new THREE.Vector3(1, 0, 0).applyQuaternion(qq);
       const roll = right.y;
       const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(qq);
@@ -363,7 +402,30 @@ export class Vehicle {
         const kick = new THREE.Vector3(-v.x * 0.12 + (Math.random() - 0.5) * 2, 0.8 + Math.random() * 1.2, -v.z * 0.12 + (Math.random() - 0.5) * 2);
         dust.emit(new THREE.Vector3(cp.x, cp.y + 0.2, cp.z), kick, 0.6 + spd * 0.035 + side * 0.002, time);
       }
+      if (this.skids && dt > 0) this.skidMark(i);
     }
+  }
+
+  // tyre marks from sideways slide at the contact patch, wheelspin off the line, locked brakes and the handbrake
+  skidMark(i) {
+    const vc = this.vc;
+    const id = `${this.number}-${i}`;
+    if (this.lostWheels?.has(i) || !vc.wheelIsInContact(i)) { this.skids.add(id, null, null, 0); return; }
+    const c = vc.wheelContactPoint(i);
+    const cp = _p.set(c.x, c.y, c.z);
+    const t = this.body.translation(), v = this.body.linvel(), w = this.body.angvel();
+    _r.set(cp.x - t.x, cp.y - t.y, cp.z - t.z);
+    _v.set(w.x, w.y, w.z).cross(_r).add(_s.set(v.x, v.y, v.z));
+    const q = this.group.quaternion;
+    _s.set(1, 0, 0).applyAxisAngle(_up, vc.wheelSteering(i) ?? 0).applyQuaternion(q);
+    const slide = Math.abs(_v.dot(_s));
+    const fwdSpd = Math.hypot(v.x, v.z);
+    const I = this.input;
+    let k = THREE.MathUtils.smoothstep(slide, 2.2, 7);
+    if (i >= 2 && I.throttle > 0.8 && this.gear === 1 && fwdSpd < 13 && fwdSpd > 0.5 && !this.totaled) k = Math.max(k, 0.55 * (1 - fwdSpd / 13));
+    if (I.brake > 0.6 && fwdSpd > 6) k = Math.max(k, 0.35);
+    if (i >= 2 && I.hand && fwdSpd > 4) k = Math.max(k, 0.6);
+    this.skids.add(id, cp, _s, k, this.surface > 0.5);
   }
 
   dispose() {

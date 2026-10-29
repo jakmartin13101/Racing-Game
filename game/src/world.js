@@ -3,18 +3,18 @@ import * as THREE from 'three';
 const BASE = import.meta.env.BASE_URL;
 
 export async function loadWorld() {
-  const [hb, track] = await Promise.all([
+  const [hb, data] = await Promise.all([
     fetch(`${BASE}world/height.u16`).then((r) => r.arrayBuffer()),
     fetch(`${BASE}world/track.json`).then((r) => r.json()),
   ]);
   const raw = new Uint16Array(hb);
   const heights = new Float32Array(raw.length);
-  const k = (track.hmax - track.hmin) / 65535;
-  for (let i = 0; i < raw.length; i++) heights[i] = track.hmin + raw[i] * k;
-  const g = track.grid;
-  const res = track.extent / (g - 1);
-  const half = track.extent / 2;
-  const world = { heights, track, grid: g, res, half, extent: track.extent };
+  const k = (data.hmax - data.hmin) / 65535;
+  for (let i = 0; i < raw.length; i++) heights[i] = data.hmin + raw[i] * k;
+  const g = data.grid;
+  const res = data.extent / (g - 1);
+  const half = data.extent / 2;
+  const world = { heights, data, grid: g, res, half, extent: data.extent };
   world.heightAt = (x, z) => {
     const fx = (x + half) / res, fz = (z + half) / res;
     let ix = Math.floor(fx), iz = Math.floor(fz);
@@ -80,12 +80,15 @@ vec3 topToWorld(vec3 tn, vec3 N) {
 export function buildTerrain(world, M, quality) {
   const { extent, half } = world;
   // non-uniform grid: dense where the track and volcano are, coarse at the horizon
-  const inner = 760, step = quality.terrainStep;
+  // fine within the volcano tracks, medium out to the village and the sprint start, coarse to the horizon
+  const inner = 760, mid = 1150, step = quality.terrainStep, stepM = step * 1.5;
   const axis = [];
-  const outerN = 90;
-  for (let i = 0; i < outerN; i++) axis.push(-half + (half - inner) * (i / outerN));
+  const outerN = 60;
+  for (let i = 0; i < outerN; i++) axis.push(-half + (half - mid) * (i / outerN));
+  for (let v = -mid; v < -inner; v += stepM) axis.push(v);
   for (let v = -inner; v < inner; v += step) axis.push(v);
-  for (let i = 0; i <= outerN; i++) axis.push(inner + (half - inner) * (i / outerN));
+  for (let v = inner; v < mid; v += stepM) axis.push(v);
+  for (let i = 0; i <= outerN; i++) axis.push(mid + (half - mid) * (i / outerN));
   const n = axis.length;
   const pos = new Float32Array(n * n * 3);
   let k = 0;
@@ -130,7 +133,7 @@ export function buildTerrain(world, M, quality) {
   ntex.generateMipmaps = true; ntex.needsUpdate = true;
   const mask = loader.load(`${BASE}world/masks.png`);
 
-  const mat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 });
+  const mat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, envMapIntensity: 0.7 });
   const uniforms = {
     tNH: { value: ntex }, tMask: { value: mask }, tNoise: { value: M.noise },
     ashA: { value: M.ash.a }, ashP: { value: M.ash.p },
@@ -225,7 +228,8 @@ gAO = ro.r;
 gEm = vec3(1.0, 0.26, 0.04) * (pow(msk.r, 6.0) * 0.1 + pow(msk.r, 14.0) * 0.8);
 diffuseColor.rgb = albedo;
 `)
-      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = clamp(ro.g, 0.3, 1.0);')
+      // volcanic ground is matte: remap the scanned roughness so low sun doesn't glaze the plain white
+      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = clamp(0.62 + ro.g * 0.42, 0.62, 1.0);')
       .replace('#include <normal_fragment_maps>', 'normal = normalize((viewMatrix * vec4(gN, 0.0)).xyz);')
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += gEm;')
       .replace('#include <aomap_fragment>', `
@@ -241,16 +245,20 @@ reflectedLight.directDiffuse *= mix(1.0, ambientOcclusion, 0.5);`);
 }
 
 // ---------------------------------------------------------------- track surface ribbon
-export function buildTrackRibbon(world, M) {
-  const c = world.track.centre;
-  const W = world.track.width;
+export function buildTrackRibbon(world, M, track) {
+  const c = track.centre;
+  const W = track.width;
+  const closed = track.closed;
   const across = [-1.6, -1.25, -1.0, -0.85, -0.7, -0.55, -0.4, -0.25, -0.12, 0, 0.12, 0.25, 0.4, 0.55, 0.7, 0.85, 1.0, 1.25, 1.6];
   const n = c.length;
   const verts = [], uvs = [], idx = [];
   let s = 0;
-  for (let i = 0; i <= n; i++) {
-    const p = c[i % n], q = c[(i + 1) % n];
-    const tx = q[0] - p[0], tz = q[2] - p[2];
+  const rows = closed ? n + 1 : n;
+  for (let i = 0; i < rows; i++) {
+    const p = c[i % n];
+    const q = closed ? c[(i + 1) % n] : c[Math.min(i + 1, n - 1)];
+    const o = closed ? p : c[Math.max(i - 1, 0)];
+    const tx = q[0] - o[0], tz = q[2] - o[2];
     const L = Math.hypot(tx, tz) || 1;
     const nx = -tz / L, nz = tx / L;
     for (const a of across) {
@@ -260,10 +268,10 @@ export function buildTrackRibbon(world, M) {
       verts.push(x, y, z);
       uvs.push(s, lat);
     }
-    if (i < n) s += Math.hypot(q[0] - p[0], q[2] - p[2]);
+    if (i < rows - 1) s += Math.hypot(q[0] - p[0], q[2] - p[2]);
   }
   const m = across.length;
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < rows - 1; i++) {
     if (c[i][4] && c[(i + 1) % n][4]) continue; // lava gap at the jump
     for (let j = 0; j < m - 1; j++) {
       const a = i * m + j, b = a + 1, cc = a + m, d = cc + 1;
@@ -280,7 +288,7 @@ export function buildTrackRibbon(world, M) {
   });
   const uniforms = {
     ashA: { value: M.ash.a }, ashP: { value: M.ash.p }, tNoise: { value: M.noise },
-    tDetail: { value: M.detail }, uHalfW: { value: W / 2 },
+    tDetail: { value: M.detail }, uHalfW: { value: W / 2 }, uLen: { value: closed ? 1e9 : s },
   };
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, uniforms);
@@ -290,7 +298,7 @@ export function buildTrackRibbon(world, M) {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
 varying vec3 vW; varying vec2 vT;
-uniform sampler2D ashA, ashP, tDetail; uniform float uHalfW;
+uniform sampler2D ashA, ashP, tDetail; uniform float uHalfW, uLen;
 ${GLSL_COMMON}
 vec3 rN; float rAO; float rR;`)
       .replace('#include <map_fragment>', /* glsl */`
@@ -329,7 +337,7 @@ tn = normalize(tn + vec3(dN.xy, 0.0) * 0.25);
 rN = tn; rAO = P.b; rR = mix(A.a, 0.62, rut * 0.6);
 diffuseColor.rgb = col;
 float fade = 1.0 - smoothstep(uHalfW + 0.5, uHalfW * 1.55, abs(lat) + (nzf.b - 0.5) * 5.0);
-diffuseColor.a = fade;
+diffuseColor.a = fade * smoothstep(0.0, 10.0, along) * smoothstep(uLen, uLen - 10.0, along);
 `)
       .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = rR;')
       .replace('#include <normal_fragment_maps>', `
@@ -402,7 +410,7 @@ lavaN = normalize(mix(lavaN, vec3(0,0,1), molten * 0.7));
     return mat;
   };
   const riverMat = makeMat(true);
-  for (const rv of world.track.rivers) {
+  for (const rv of world.data.rivers) {
     const pts = rv.points;
     const verts = [], uvs = [], idx = [];
     let s = 0;
@@ -433,7 +441,7 @@ lavaN = normalize(mix(lavaN, vec3(0,0,1), molten * 0.7));
     geo.computeVertexNormals();
     group.add(new THREE.Mesh(geo, riverMat));
   }
-  const lk = world.track.lake;
+  const lk = world.data.lake;
   const lake = new THREE.Mesh(new THREE.CircleGeometry(lk.r + 30, 96).rotateX(-Math.PI / 2), makeMat(false));
   lake.position.set(lk.x, lk.y + 1.0, lk.z);
   group.add(lake);
@@ -451,7 +459,7 @@ let trackGrid = null;
 export function nearTrack(world, x, z, r) {
   if (!trackGrid) {
     trackGrid = new Map();
-    for (const p of world.track.centre) {
+    for (const p of world.data.tracks.flatMap((t) => t.centre)) {
       const k = `${Math.floor(p[0] / 32)},${Math.floor(p[2] / 32)}`;
       if (!trackGrid.has(k)) trackGrid.set(k, []);
       trackGrid.get(k).push(p);

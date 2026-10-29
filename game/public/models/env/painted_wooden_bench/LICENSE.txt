@@ -1,0 +1,6 @@
+Painted Wooden Bench (painted_wooden_bench)
+Source: https://polyhaven.com/a/painted_wooden_bench
+Author(s): Kirill Sannikov
+License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
+Type: model
+Files: painted_wooden_bench_2k.gltf, textures/painted_wooden_bench_arm_2k.jpg, textures/painted_wooden_bench_nor_gl_2k.jpg, textures/painted_wooden_bench_diff_2k.jpg, painted_wooden_bench.bin

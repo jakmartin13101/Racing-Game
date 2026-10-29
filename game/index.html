@@ -2,44 +2,107 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>Caldera Loop</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>Gravel Riot</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@600;800&display=swap" rel="stylesheet">
-  <style>
-    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; touch-action: none; }
-    canvas { display: block; width: 100%; height: 100%; }
-    #hud { position: fixed; inset: 0; pointer-events: none; font-family: 'Saira Condensed', sans-serif; color: #fff;
-      text-shadow: 0 2px 6px rgba(0,0,0,.6); }
-    #hud .tl { position: absolute; left: 3vw; top: 3vh; }
-    #hud .tr { position: absolute; right: 3vw; top: 3vh; text-align: right; }
-    #hud .br { position: absolute; right: 3vw; bottom: 4vh; text-align: right; }
-    #hud .bl { position: absolute; left: 3vw; bottom: 4vh; }
-    .big { font-size: clamp(34px, 6vw, 72px); font-weight: 800; line-height: .9; color: #ffc23a; }
-    .lbl { font-size: clamp(14px, 1.6vw, 20px); font-weight: 600; letter-spacing: .08em; opacity: .9; }
-    .time { font-size: clamp(26px, 3.6vw, 46px); font-weight: 800; color: #ffc23a; }
-    #boost { width: clamp(140px, 22vw, 300px); height: 14px; background: rgba(0,0,0,.45); transform: skewX(-20deg); margin-top: 6px; }
-    #boost i { display: block; height: 100%; width: 100%; background: linear-gradient(90deg, #ffb21e, #ff5a1e); }
-    #loading { position: fixed; inset: 0; display: grid; place-items: center; background: #0b0908; color: #ffc23a;
-      font: 800 28px 'Saira Condensed', sans-serif; letter-spacing: .1em; z-index: 5; }
-    #touch { position: fixed; inset: 0; display: none; }
-    #touch div { position: absolute; bottom: 5vh; width: 18vw; height: 18vw; max-width: 120px; max-height: 120px; border-radius: 50%;
-      background: rgba(255,255,255,.12); border: 2px solid rgba(255,255,255,.3); pointer-events: auto; }
-    #msg { position: absolute; left: 0; right: 0; top: 32vh; text-align: center; font-size: clamp(40px, 8vw, 110px); font-weight: 800;
-      color: #ffc23a; }
-  </style>
+  <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/src/ui.css">
 </head>
 <body>
-  <div id="loading">LOADING CALDERA LOOP…</div>
-  <div id="hud">
-    <div class="tl"><div class="big" id="pos">LAP <span id="lap">1</span>/1</div><div class="lbl">CALDERA LOOP</div></div>
-    <div class="tr"><div class="time" id="time">0:00.00</div><div class="lbl" id="best"></div></div>
-    <div class="bl"><div class="lbl">BOOST <span id="heat"></span></div><div id="boost"><i id="boostbar"></i></div></div>
+  <div id="loading"><div class="logo">GRAVEL <b>RIOT</b></div><div class="bar"><i id="loadbar"></i></div><div id="loadtxt">LOADING VOLCANIC REGION…</div></div>
+
+  <!-- in-race HUD -->
+  <div id="hud" hidden>
+    <div class="tl">
+      <div class="big"><span id="pos">1</span><small>/<span id="poscount">1</span></small></div>
+      <div class="lbl" id="lapline">LAP <span id="lap">1</span>/<span id="laps">1</span></div>
+      <div class="lbl dim" id="trackname"></div>
+    </div>
+    <div class="tr"><div class="time" id="time">0:00.00</div><div class="lbl dim" id="best"></div><div class="lbl dim" id="fps"></div></div>
+    <div class="bl"><div class="lbl">BOOST</div><div id="boost"><i id="boostbar"></i></div></div>
     <div class="br"><div class="big" id="speed">0</div><div class="lbl">KM/H</div></div>
+    <canvas id="map" width="220" height="220"></canvas>
+    <div id="board"></div>
     <div id="msg"></div>
+    <div id="toast"></div>
   </div>
-  <div id="touch"><div id="tl" style="left:4vw"></div><div id="tr2" style="left:26vw"></div>
-    <div id="tb" style="right:26vw"></div><div id="tg" style="right:4vw"></div></div>
+
+  <!-- touch controls -->
+  <div id="touch" hidden>
+    <div class="steer">
+      <button data-k="left" class="t-btn t-left" aria-label="Steer left"><svg viewBox="0 0 24 24"><path d="M15 4 7 12l8 8"/></svg></button>
+      <button data-k="right" class="t-btn t-right" aria-label="Steer right"><svg viewBox="0 0 24 24"><path d="m9 4 8 8-8 8"/></svg></button>
+    </div>
+    <div class="pedals">
+      <button data-k="boost" class="t-btn t-boost">BOOST</button>
+      <button data-k="brake" class="t-btn t-brake">BRAKE</button>
+      <button data-k="gas" class="t-btn t-gas">GAS</button>
+    </div>
+    <div class="t-top">
+      <button data-k="camera" class="t-small" aria-label="Camera">CAM</button>
+      <button data-k="pause" class="t-small" aria-label="Pause">❚❚</button>
+    </div>
+  </div>
+
+  <!-- menus -->
+  <div id="ui" hidden>
+    <section id="s-title" class="screen">
+      <div class="brand"><div class="logo">GRAVEL <b>RIOT</b></div><div class="sub">VOLCANIC REGION</div></div>
+      <nav class="menu">
+        <button data-go="world">World Race<small>Three-event championship</small></button>
+        <button data-go="quick">Quick Race<small>Pick a track, opponents and laps</small></button>
+        <button data-go="settings">Settings<small>Graphics, frame rate, cameras, controls</small></button>
+        <button data-go="quit" class="desktop-only">Quit</button>
+      </nav>
+      <div class="foot" id="foot"></div>
+    </section>
+
+    <section id="s-quick" class="screen">
+      <h2>Quick Race</h2>
+      <div class="tracks" id="trackcards"></div>
+      <div class="opts">
+        <div class="row"><span>Laps</span><div class="step" data-opt="laps"></div></div>
+        <div class="row"><span>Opponents</span><div class="step" data-opt="opponents"></div></div>
+        <div class="row"><span>Difficulty</span><div class="seg" data-opt="difficulty"></div></div>
+        <div class="row"><span>Paint</span><div class="swatches" id="paints"></div></div>
+      </div>
+      <nav class="actions"><button data-go="title" class="ghost">Back</button><button data-go="start-quick" class="primary">Start Race</button></nav>
+    </section>
+
+    <section id="s-world" class="screen">
+      <h2>World Race</h2>
+      <p class="lede">Three events across the Volcanic Region. Points for the top eight; the most points after the Caldera Loop takes the title.</p>
+      <ol class="events" id="events"></ol>
+      <div class="opts">
+        <div class="row"><span>Difficulty</span><div class="seg" data-opt="cdifficulty"></div></div>
+        <div class="row"><span>Paint</span><div class="swatches" id="cpaints"></div></div>
+      </div>
+      <nav class="actions"><button data-go="title" class="ghost">Back</button><button data-go="start-world" class="primary" id="worldbtn">Start Championship</button></nav>
+    </section>
+
+    <section id="s-settings" class="screen">
+      <h2>Settings</h2>
+      <div class="opts" id="settingrows"></div>
+      <p class="note" id="setnote"></p>
+      <nav class="actions"><button data-go="back" class="primary">Done</button></nav>
+    </section>
+
+    <section id="s-pause" class="screen">
+      <h2>Paused</h2>
+      <nav class="menu">
+        <button data-go="resume">Resume</button>
+        <button data-go="restart">Restart Race</button>
+        <button data-go="settings">Settings</button>
+        <button data-go="quit-race">Quit to Menu</button>
+      </nav>
+    </section>
+
+    <section id="s-results" class="screen">
+      <h2 id="restitle">Results</h2>
+      <table class="results"><thead id="reshead"></thead><tbody id="resbody"></tbody></table>
+      <nav class="actions" id="resactions"></nav>
+    </section>
+  </div>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>

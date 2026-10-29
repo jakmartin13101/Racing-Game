@@ -36,36 +36,27 @@ class Scatter {
   }
 }
 
-export async function buildProps(world, scene, M, quality) {
+export async function loadPropModels(names) {
   const loader = new GLTFLoader();
-  const names = ['boulder_01', 'rock_09', 'namaqualand_boulder_02', 'namaqualand_cliff_02', 'Barrel_01', 'barrel_03',
-    'old_tyre', 'wooden_crate_02', 'concrete_road_barrier', 'metal_jerrycan', 'propane_tank', 'rusted_wheel_rim_02'];
   const models = {};
   await Promise.all(names.map(async (n) => { models[n] = await loadModel(loader, n); }));
   for (const m of Object.values(models)) for (const { mat } of m.meshes) {
     mat.envMapIntensity = 0.8;
     if (mat.map) mat.map.anisotropy = 8;
   }
-  const group = new THREE.Group();
-  scene.add(group);
-  const S = Object.fromEntries(names.map((n) => [n, new Scatter(models[n])]));
-  const rnd = mulberry(1234);
-  const c = world.track.centre;
-  const n = c.length;
-  const W = world.track.width;
+  return models;
+}
+
+// A placement helper shared by the trackside and village dressing: put(name, x, z, yaw, size, opts)
+export function makePlacer(world, models, rnd) {
+  const S = {};
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), p = new THREE.Vector3();
   const up = new THREE.Vector3(0, 1, 0), N = new THREE.Vector3();
-  const frame = (i) => {
-    const a = c[(i + n) % n], b = c[(i + 2 + n) % n];
-    const tx = b[0] - a[0], tz = b[2] - a[2];
-    const L = Math.hypot(tx, tz) || 1;
-    return { x: a[0], z: a[2], tx: tx / L, tz: tz / L, nx: -tz / L, nz: tx / L, yaw: Math.atan2(tx / L, tz / L) };
-  };
-  // place a model: size = target largest dimension (m); align = tilt to terrain normal
-  const put = (name, x, z, yaw, size, { align = 0, sink = 0.02, tilt = 0, yOff = 0, scaleY = 1 } = {}) => {
+  // size = target largest dimension (m); align = tilt to terrain normal
+  const put = (name, x, z, yaw, size, { align = 0, sink = 0.02, tilt = 0, yOff = 0, scaleY = 1, y = null, byHeight = false } = {}) => {
     const mdl = models[name];
-    const s = size / Math.max(mdl.size.x, mdl.size.y, mdl.size.z);
-    const y = world.heightAt(x, z);
+    const s = size / (byHeight ? mdl.size.y : Math.max(mdl.size.x, mdl.size.y, mdl.size.z));
+    const gy = y ?? world.heightAt(x, z);
     q.setFromAxisAngle(up, yaw);
     if (align > 0) {
       world.normalAt(x, z, N);
@@ -74,98 +65,108 @@ export async function buildProps(world, scene, M, quality) {
     }
     if (tilt) q.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler((rnd() - 0.5) * tilt, 0, (rnd() - 0.5) * tilt)));
     sc.set(s, s * scaleY, s);
-    p.set(x, y - mdl.box.min.y * s - sink * size + yOff, z);
+    p.set(x, gy - mdl.box.min.y * s - sink * size + yOff, z);
     m4.compose(p, q, sc);
-    S[name].add(m4);
+    (S[name] ||= new Scatter(mdl)).add(m4);
   };
+  const build = (group, shadows = true) => { for (const sc of Object.values(S)) sc.build(group, shadows); };
+  return { put, build };
+}
 
-  // --------------------------------------------------------- rocks along the track and across the slopes
+const NAMES = ['boulder_01', 'rock_09', 'namaqualand_boulder_02', 'namaqualand_cliff_02', 'Barrel_01', 'barrel_03',
+  'old_tyre', 'wooden_crate_02', 'concrete_road_barrier', 'metal_jerrycan', 'propane_tank', 'rusted_wheel_rim_02'];
+
+// Trackside dressing for every track, plus rocks strewn across the volcano.
+export async function buildProps(world, scene, M, quality, tracks) {
+  const models = await loadPropModels(NAMES);
+  const group = new THREE.Group();
+  scene.add(group);
+  const rnd = mulberry(1234);
+  const { put, build } = makePlacer(world, models, rnd);
   const rocks = ['boulder_01', 'rock_09', 'namaqualand_boulder_02'];
-  for (let i = 0; i < n; i += 5) {
-    const f = frame(i);
-    for (const side of [-1, 1]) {
-      if (rnd() > 0.5) continue;
-      const lat = side * (W / 2 + 3.5 + Math.pow(rnd(), 1.8) * 50);
-      const x = f.x + f.nx * lat + (rnd() - 0.5) * 4, z = f.z + f.nz * lat + (rnd() - 0.5) * 4;
-      if (nearTrack(world, x, z, W / 2 + 2.5)) continue;
-      const nearEdge = Math.abs(lat) < W / 2 + 9;
-      const size = nearEdge ? 0.5 + rnd() * 1.3 : 1 + Math.pow(rnd(), 2.5) * 7;
-      put(rocks[Math.floor(rnd() * rocks.length)], x, z, rnd() * 6.28, size, { align: 0.6, sink: 0.12, tilt: 0.4 });
+  const village = world.data.tracks.find((t) => t.villageCentre)?.villageCentre;
+  const inVillage = (x, z, r = 300) => village && Math.hypot(x - village[0], z - village[1]) < r;
+
+  for (const track of tracks) {
+    const n = track.n;
+    const W = track.width;
+    const frame = (i) => track.frame(i);
+    const urban = track.id === 'village';
+    // --------------------------------------------------------- rocks along the track
+    for (let i = 0; i < n; i += 5) {
+      const f = frame(i);
+      for (const side of [-1, 1]) {
+        if (rnd() > 0.5) continue;
+        const lat = side * (W / 2 + 3.5 + Math.pow(rnd(), 1.8) * 50);
+        const x = f.x + f.nx * lat + (rnd() - 0.5) * 4, z = f.z + f.nz * lat + (rnd() - 0.5) * 4;
+        if (nearTrack(world, x, z, W / 2 + 2.5) || inVillage(x, z, 200)) continue;
+        const nearEdge = Math.abs(lat) < W / 2 + 9;
+        const size = nearEdge ? 0.5 + rnd() * 1.3 : 1 + Math.pow(rnd(), 2.5) * (urban ? 3 : 7);
+        put(rocks[Math.floor(rnd() * rocks.length)], x, z, rnd() * 6.28, size, { align: 0.6, sink: 0.12, tilt: 0.4 });
+      }
     }
+    // --------------------------------------------------------- start straight: barriers, paddock clutter
+    const st = track.start;
+    for (let k = -70; k <= 90; k += 4) {
+      if (!track.closed && (st + k < 0)) continue;
+      const f = frame(st + k);
+      for (const side of [-1, 1]) {
+        const lat = side * (W / 2 + 1.6);
+        if (urban && inVillage(f.x, f.z, 180)) continue;
+        put('concrete_road_barrier', f.x + f.nx * lat, f.z + f.nz * lat, f.yaw + Math.PI / 2, 2.0, { align: 1, sink: 0.0 });
+      }
+    }
+    const pad = frame(st + 10);
+    const padX = pad.x - pad.nx * (W / 2 + 16), padZ = pad.z - pad.nz * (W / 2 + 16);
+    for (let k = 0; k < 40; k++) {
+      const a = rnd() * 6.28, r = 3 + rnd() * 26;
+      const x = padX + Math.cos(a) * r, z = padZ + Math.sin(a) * r;
+      if (nearTrack(world, x, z, W / 2 + 3)) continue;
+      const pick = rnd();
+      if (pick < 0.3) put(rnd() < 0.5 ? 'Barrel_01' : 'barrel_03', x, z, rnd() * 6.28, 0.9, { align: 1 });
+      else if (pick < 0.55) {
+        const h = 1 + Math.floor(rnd() * 4);
+        for (let t = 0; t < h; t++) put('old_tyre', x, z, rnd() * 6.28, 0.85, { align: 1, yOff: t * 0.27 });
+      } else if (pick < 0.75) put('wooden_crate_02', x, z, rnd() * 6.28, 1.1, { align: 1 });
+      else if (pick < 0.88) put('propane_tank', x, z, rnd() * 6.28, 1.1, { align: 1 });
+      else put('metal_jerrycan', x, z, rnd() * 6.28, 0.45, { align: 1 });
+    }
+    // tyre walls on the outside of tight corners
+    for (let i = 0; i < n; i += 6) {
+      if (!track.closed && (i < 12 || i > n - 12)) continue;
+      const a = frame(i - 10), b = frame(i + 10);
+      const turn = a.tx * b.tz - a.tz * b.tx;
+      if (Math.abs(turn) < 0.25) continue;
+      const f = frame(i);
+      const side = turn > 0 ? -1 : 1;
+      for (let t = 0; t < 3; t++) {
+        const lat = side * (W / 2 + 2.2);
+        const x = f.x + f.nx * lat + f.tx * (t - 1) * 0.9, z = f.z + f.nz * lat + f.tz * (t - 1) * 0.9;
+        if (nearTrack(world, x, z, W / 2 + 1.2)) continue;
+        put('old_tyre', x, z, rnd() * 6, 0.85, { align: 1 });
+        put('old_tyre', x, z, rnd() * 6, 0.85, { align: 1, yOff: 0.27 });
+      }
+    }
+    // wreckage and scrap rims scattered around
+    for (let k = 0; k < 30; k++) {
+      const f = frame(Math.floor(rnd() * n));
+      const lat = (rnd() < 0.5 ? -1 : 1) * (W / 2 + 4 + rnd() * 12);
+      const x = f.x + f.nx * lat, z = f.z + f.nz * lat;
+      if (!nearTrack(world, x, z, W / 2 + 3)) put('rusted_wheel_rim_02', x, z, rnd() * 6.28, 0.7, { align: 1, tilt: 2.5 });
+    }
+    // start gantry, and a finish gantry at the top of a sprint
+    group.add(buildGate(frame(track.line), world, W, `GRAVEL RIOT · ${track.name.toUpperCase()}`));
+    if (!track.closed) group.add(buildGate(frame(track.line + track.finishRel), world, W, 'FINISH · SUMMIT LOOKOUT'));
+    if (track.id === 'caldera') group.add(buildShed(world, padX - pad.tx * 18, padZ - pad.tz * 18, pad.yaw));
   }
   for (let i = 0; i < quality.fieldRocks; i++) {
     const a = rnd() * Math.PI * 2, r = 150 + Math.pow(rnd(), 0.7) * 950;
     const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    if (nearTrack(world, x, z, W / 2 + 6)) continue;
+    if (nearTrack(world, x, z, 14) || inVillage(x, z, 320)) continue;
     put(rocks[Math.floor(rnd() * rocks.length)], x, z, rnd() * 6.28, 1.2 + Math.pow(rnd(), 4) * 16, { align: 0.7, sink: 0.15, tilt: 0.5 });
   }
-  // big cliff outcrops lining cuttings
-  for (let i = 0; i < (quality.cliffs ? n : 0); i += 37) {
-    const f = frame(i);
-    for (const side of [-1, 1]) {
-      const lat = side * (W / 2 + 14 + rnd() * 25);
-      const x = f.x + f.nx * lat, z = f.z + f.nz * lat;
-      const hTrack = c[i][1];
-      const hHere = world.heightAt(x, z);
-      if (hHere - hTrack > 3 && !nearTrack(world, x, z, W / 2 + 8)) {
-        put('namaqualand_cliff_02', x, z, f.yaw + (side > 0 ? 0 : Math.PI) + (rnd() - 0.5), 14 + rnd() * 14, { align: 0.3, sink: 0.25 });
-      }
-    }
-  }
-
-  // --------------------------------------------------------- start straight: barriers, paddock clutter
-  const st = world.track.start;
-  for (let k = -70; k <= 90; k += 4) {
-    const f = frame(st + k);
-    for (const side of [-1, 1]) {
-      const lat = side * (W / 2 + 1.6);
-      put('concrete_road_barrier', f.x + f.nx * lat, f.z + f.nz * lat, f.yaw + Math.PI / 2, 2.0, { align: 1, sink: 0.0 });
-    }
-  }
-  // paddock beside the start: barrels, tyre stacks, crates, gas bottles
-  const pad = frame(st + 10);
-  const padX = pad.x - pad.nx * (W / 2 + 16), padZ = pad.z - pad.nz * (W / 2 + 16);
-  for (let k = 0; k < 40; k++) {
-    const a = rnd() * 6.28, r = 3 + rnd() * 26;
-    const x = padX + Math.cos(a) * r, z = padZ + Math.sin(a) * r;
-    if (nearTrack(world, x, z, W / 2 + 3)) continue;
-    const pick = rnd();
-    if (pick < 0.3) put(rnd() < 0.5 ? 'Barrel_01' : 'barrel_03', x, z, rnd() * 6.28, 0.9, { align: 1 });
-    else if (pick < 0.55) {
-      const h = 1 + Math.floor(rnd() * 4);
-      for (let t = 0; t < h; t++) put('old_tyre', x, z, rnd() * 6.28, 0.85, { align: 1, yOff: t * 0.27 });
-    } else if (pick < 0.75) put('wooden_crate_02', x, z, rnd() * 6.28, 1.1, { align: 1 });
-    else if (pick < 0.88) put('propane_tank', x, z, rnd() * 6.28, 1.1, { align: 1 });
-    else put('metal_jerrycan', x, z, rnd() * 6.28, 0.45, { align: 1 });
-  }
-  // tyre walls on the outside of tight corners
-  for (let i = 0; i < n; i += 6) {
-    const a = frame(i - 10), b = frame(i + 10);
-    const turn = a.tx * b.tz - a.tz * b.tx;
-    if (Math.abs(turn) < 0.25) continue;
-    const f = frame(i);
-    const side = turn > 0 ? -1 : 1;
-    for (let t = 0; t < 3; t++) {
-      const lat = side * (W / 2 + 2.2 + t * 0.0);
-      put('old_tyre', f.x + f.nx * lat + f.tx * (t - 1) * 0.9, f.z + f.nz * lat + f.tz * (t - 1) * 0.9, rnd() * 6, 0.85, { align: 1 });
-      put('old_tyre', f.x + f.nx * lat + f.tx * (t - 1) * 0.9, f.z + f.nz * lat + f.tz * (t - 1) * 0.9, rnd() * 6, 0.85, { align: 1, yOff: 0.27 });
-    }
-  }
-  // wreckage and scrap rims scattered around
-  for (let k = 0; k < 30; k++) {
-    const f = frame(Math.floor(rnd() * n));
-    const lat = (rnd() < 0.5 ? -1 : 1) * (W / 2 + 4 + rnd() * 12);
-    const x = f.x + f.nx * lat, z = f.z + f.nz * lat;
-    if (!nearTrack(world, x, z, W / 2 + 3)) put('rusted_wheel_rim_02', x, z, rnd() * 6.28, 0.7, { align: 1, tilt: 2.5 });
-  }
-  for (const s of Object.values(S)) s.build(group);
-
-  // --------------------------------------------------------- start gantry with banner
-  const gate = buildGate(M, frame(st + 20), world, W);
-  group.add(gate);
-  const shed = buildShed(world, padX - pad.tx * 18, padZ - pad.tz * 18, pad.yaw);
-  group.add(shed);
-  return { group, update() {} };
+  build(group);
+  return { group, models, update() {} };
 }
 
 function bannerTexture(text, w = 2048, h = 256) {
@@ -189,7 +190,7 @@ function bannerTexture(text, w = 2048, h = 256) {
   return t;
 }
 
-function buildGate(M, f, world, W) {
+function buildGate(f, world, W, text) {
   const g = new THREE.Group();
   const steel = new THREE.MeshStandardMaterial({ color: 0x2a2826, roughness: 0.55, metalness: 0.8 });
   const span = W + 6;
@@ -220,7 +221,7 @@ function buildGate(M, f, world, W) {
   beam.rotation.y = f.yaw;
   g.add(beam);
   const banner = new THREE.Mesh(new THREE.PlaneGeometry(span - 1, 1.6),
-    new THREE.MeshStandardMaterial({ map: bannerTexture('GRAVEL RIOT · CALDERA LOOP'), roughness: 0.85, side: THREE.FrontSide }));
+    new THREE.MeshStandardMaterial({ map: bannerTexture(text), roughness: 0.85, side: THREE.FrontSide }));
   banner.position.set(f.x - f.tx * 0.32, y0 + h - 1.2, f.z - f.tz * 0.32);
   banner.rotation.y = f.yaw + Math.PI;
   const back = banner.clone();

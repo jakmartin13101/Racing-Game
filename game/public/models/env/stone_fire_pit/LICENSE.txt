@@ -1,0 +1,6 @@
+Stone Fire Pit (stone_fire_pit)
+Source: https://polyhaven.com/a/stone_fire_pit
+Author(s): Sebastian Platen
+License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
+Type: model
+Files: stone_fire_pit_2k.gltf, textures/stone_fire_pit_arm_2k.jpg, textures/stone_fire_pit_nor_gl_2k.jpg, stone_fire_pit.bin, textures/stone_fire_pit_diff_2k.jpg

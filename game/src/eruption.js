@@ -1,0 +1,520 @@
+import * as THREE from 'three';
+import RAPIER from '@dimforge/rapier3d-compat';
+import { mulberry } from './world.js';
+
+// Eruption, the World Race finale. The climb: the ground heaves up into ramps, fissures crack open across the
+// road, quakes shake the pack and a lava breakout floods one of the switchbacks. The top: the volcano erupts and
+// every truck that reaches the lip is flung right across the crater through fountains of lava. The descent: lava
+// pours over the rim behind the pack and chases it down, past heavy rocks lying on the road; anyone it catches
+// is burned out.
+const GRAV = 9.81;
+const G_ROCK = (0x0008 << 16) | 0x0003; // hits the ground and trucks
+const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3(), tq = new THREE.Quaternion(), tq2 = new THREE.Quaternion();
+const UP = new THREE.Vector3(0, 1, 0), RIGHT = new THREE.Vector3(1, 0, 0), FWD = new THREE.Vector3(0, 0, 1);
+const clamp = THREE.MathUtils.clamp;
+
+export class Eruption {
+  constructor(hz, lavaGroup, makeHeave) {
+    this.hz = hz;
+    const t = this.t = hz.track;
+    this.rnd = mulberry(4242);
+    this.lip = t.lip; this.land = t.land; this.seg = t.segs;
+    this.crater = hz.world.data.crater || { x: 0, z: 0, r: 88, y: hz.world.heightAt(0, 0) + 6 };
+    this.env = 0;
+    this.quakeT = 6;
+    this.fissures = [];
+    // ground that heaves into ramps on the climb; the third floods with lava behind its ramp
+    const up0 = this.seg.up, upN = this.lip - up0;
+    const spots = [[260, 470, false], [up0 + upN * 0.12, up0 + upN * 0.3, false], [up0 + upN * 0.42, up0 + upN * 0.6, true],
+      [up0 + upN * 0.7, up0 + upN * 0.86, false]];
+    this.heaves = spots.map(([a, b, lava]) => {
+      const i0 = this.straight(Math.round(a), Math.round(b));
+      return makeHeave({ i0, lava, spread: 4, event: lava ? 'breakout' : 'heave',
+        trigger: (race) => race.cars.some((c) => !c.finished && i0 - c.i > 0 && i0 - c.i < (c.isPlayer ? 230 : 110)) });
+    });
+    this.fountains = new Fountains(hz, this.crater, hz.lite);
+    // the crater glows from below
+    this.glow = new THREE.PointLight(0xff6420, 0, 520, 2);
+    this.glow.position.set(this.crater.x, this.crater.y + 18, this.crater.z);
+    hz.group.add(this.glow);
+    this.flow = new LavaFlow(this, lavaGroup);
+    this.rocks = new RoadRocks(this);
+  }
+
+  // the row in [a, b] with the straightest road for 130 m before it and 30 m after: room to line up a ramp
+  straight(a, b) {
+    const t = this.t;
+    let best = a, bs = Infinity;
+    for (let i = a; i <= b; i += 2) {
+      let s = 0;
+      for (let j = i - 130; j <= i + 30; j += 2) s = Math.max(s, Math.abs(t.curv[t.wrap(j)]));
+      if (s < bs) { bs = s; best = i; }
+    }
+    return best;
+  }
+
+  pre(dt, race, time) {
+    const t = this.t, hz = this.hz, pl = race.player;
+    for (const h of this.heaves) h.pre(dt, race, time);
+    // the sky darkens and the ash thickens as the pack climbs; the eruption itself turns it red
+    const climb = clamp((pl.i - this.seg.loopA) / (this.lip - this.seg.loopA), 0, 1);
+    const goal = this.erupting ? 1 : climb * 0.6;
+    this.env += (goal - this.env) * Math.min(1, dt * 0.5);
+    hz.env = this.env;
+    if (!this.erupting && race.cars.some((c) => !c.finished && c.i > this.lip - 480 && c.i < this.lip)) {
+      this.erupting = true;
+      hz.events.push({ type: 'erupt' });
+    }
+    this.glow.intensity = (this.erupting ? 30000 : 12000) * (0.85 + 0.15 * Math.sin(time * 2.3) * Math.sin(time * 0.7));
+    // quakes on the climb, opening fissures across the road ahead of the player
+    if (race.clock > 2 && pl.i < this.lip - 60 && !pl.finished) {
+      this.quakeT -= dt;
+      if (this.quakeT <= 0) {
+        this.quakeT = 7 + this.rnd() * 5 - this.env * 4;
+        hz.events.push({ type: 'quake', k: 0.12 + this.env * 0.25 });
+        const i = pl.i + 45 + Math.round(this.rnd() * 60);
+        if (i < this.lip - 60 && !t.c[t.wrap(i)][4] && this.heaves.every((h) => Math.abs(h.i0 - i) > 30)) this.fissure(i, time);
+      }
+    }
+    // trucks reaching the lip are flung across the crater
+    for (const st of race.cars) {
+      if (!st.leap && !st.leapt && st.i >= this.lip - 3 && st.i <= this.lip + 8 && st.v.speed() > 7 && !st.v.totaled) this.launch(st, race, time);
+    }
+    this.flow.pre(dt, race, time);
+  }
+
+  launch(st, race, time) {
+    const t = this.t, b = st.v.body, p = b.translation();
+    const f0 = t.frame(this.lip);
+    const lat = clamp((p.x - f0.x) * f0.nx + (p.z - f0.z) * f0.nz, -4, 4);
+    const k = this.land + 10;
+    const fl = t.frame(k);
+    const to = new THREE.Vector3(fl.x + fl.nx * lat, t.at(k)[1] + 0.9, fl.z + fl.nz * lat);
+    const from = new THREE.Vector3(p.x, p.y, p.z);
+    const D = Math.hypot(to.x - from.x, to.z - from.z);
+    const vh = 34, T = D / vh;
+    const vy = (to.y - from.y) / T + 0.5 * GRAV * T;
+    b.setLinvel({ x: (to.x - from.x) / T, y: vy, z: (to.z - from.z) / T }, true);
+    b.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    st.leap = { t: 0, T, from, to, yaw: Math.atan2(to.x - from.x, to.z - from.z), apex: from.y + vy * vy / (2 * GRAV) };
+    st.v.ghost = true;
+    this.hz.events.push({ type: 'leap', st, leap: st.leap });
+    this.hz.fx.burst(from.clone().setY(from.y - 0.5), time, 1.4);
+    this.fountains.surge(st.leap, st.isPlayer);
+  }
+
+  fissure(i, time) {
+    const t = this.t, hz = this.hz, W = t.width + 8;
+    const f = t.frame(i);
+    const NU = 10, NV = 2, L = 2.4 + this.rnd() * 2, verts = [], uvs = [], idx = [];
+    const skew = (this.rnd() - 0.5) * 0.6;
+    for (let j = 0; j <= NV; j++) for (let k = 0; k <= NU; k++) {
+      const lat = (k / NU - 0.5) * W, al = (j / NV - 0.5) * L + lat * skew;
+      const x = f.x + f.nx * lat + f.tx * al, z = f.z + f.nz * lat + f.tz * al;
+      verts.push(x, hz.world.heightAt(x, z) + 0.16, z);
+      uvs.push(k / NU, j / NV);
+    }
+    for (let j = 0; j < NV; j++) for (let k = 0; k < NU; k++) {
+      const a = j * (NU + 1) + k, b = a + 1, c = a + NU + 1, d = c + 1;
+      idx.push(a, c, b, b, c, d);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    g.setIndex(idx);
+    const mat = new THREE.MeshBasicMaterial({ map: crackTexture(this.rnd), color: new THREE.Color(2.6, 0.85, 0.22), transparent: true,
+      blending: THREE.AdditiveBlending, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, side: THREE.DoubleSide });
+    const mesh = new THREE.Mesh(g, mat);
+    hz.group.add(mesh);
+    this.fissures.push({ mesh, mat, f, W, L, age: 0 });
+    if (this.fissures.length > 10) { const o = this.fissures.shift(); hz.group.remove(o.mesh); o.mat.map.dispose(); o.mat.dispose(); o.mesh.geometry.dispose(); }
+    // the crack bursts open
+    for (let k = 0; k < 14; k++) {
+      const lat = (this.rnd() - 0.5) * W;
+      const x = f.x + f.nx * lat, z = f.z + f.nz * lat;
+      const y = hz.world.heightAt(x, z) + 0.3;
+      hz.fx.smoke.emit(new THREE.Vector3(x, y, z), tmp.set(this.rnd() - 0.5, 2 + this.rnd() * 3, this.rnd() - 0.5), 1.2, time, 3.5, 0.3, 0.27, 0.23);
+      if (k % 3 === 0) hz.fx.sparks(new THREE.Vector3(x, y, z), tmp.set(0, 1, 0), time, 4);
+    }
+  }
+
+  post(dt, race, time) {
+    const hz = this.hz;
+    for (const h of this.heaves) h.post(dt, race, time);
+    // flight across the crater: steer each truck onto its arc and hold it level, so everyone lands on the far rim
+    for (const st of race.cars) {
+      const L = st.leap;
+      if (st.landT > 0) { st.landT -= dt; if (st.landT <= 0) st.v.ghost = false; }
+      if (!L) continue;
+      L.t += dt;
+      const b = st.v.body, p = b.translation();
+      const rem = L.T - L.t;
+      if (st.i < this.lip - 10 || L.t > L.T + 2.5) { this.endLeap(st, false); continue; }
+      if (rem > 0.25) {
+        const vy = (L.to.y - p.y) / rem + 0.5 * GRAV * rem;
+        b.setLinvel({ x: (L.to.x - p.x) / rem, y: vy, z: (L.to.z - p.z) / rem }, true);
+      }
+      const v = b.linvel();
+      const gy = hz.world.heightAt(p.x, p.z);
+      // suspension takes the touchdown
+      if (L.t > L.T * 0.6 && p.y - gy < 3 && v.y < -8) b.setLinvel({ x: v.x, y: -8, z: v.z }, true);
+      const pitch = -Math.atan2(v.y, Math.hypot(v.x, v.z)) * 0.45;
+      tq.setFromAxisAngle(UP, L.yaw).multiply(tq2.setFromAxisAngle(RIGHT, pitch));
+      const r = b.rotation();
+      tq2.set(r.x, r.y, r.z, r.w).slerp(tq, Math.min(1, dt * 4));
+      b.setRotation(tq2, true);
+      b.setAngvel({ x: 0, y: 0, z: 0 }, true);
+      if (L.t > L.T * 0.6 && st.v.contacts >= 2) this.endLeap(st, true);
+    }
+    // the cinder rim bogs the trucks down after the landing, so the first bend can be made
+    for (const st of race.cars) {
+      if (st.i < this.land || st.i > this.land + 70 || st.v.contacts < 2) continue;
+      const v = st.v.body.linvel(), s = Math.hypot(v.x, v.z);
+      if (s < 22) continue;
+      const k = -st.v.body.mass() * 4 * dt / s;
+      st.v.body.applyImpulse({ x: v.x * k, y: 0, z: v.z * k }, true);
+    }
+    for (const fs of this.fissures) {
+      fs.age += dt;
+      fs.mat.opacity = Math.max(0, 1 - Math.max(0, fs.age - 40) / 20) * (0.75 + 0.25 * Math.sin(time * 5 + fs.age));
+      if (fs.age < 25 && Math.random() < 0.08) {
+        const lat = (Math.random() - 0.5) * fs.W, f = fs.f;
+        const x = f.x + f.nx * lat, z = f.z + f.nz * lat;
+        const c = 0.3; hz.fx.smoke.emit(new THREE.Vector3(x, hz.world.heightAt(x, z) + 0.3, z), tmp.set(0, 1.4, 0), 0.9, time, 3, c, c * 0.95, c * 0.9);
+      }
+    }
+    this.fountains.update(dt, time, this.erupting);
+    this.flow.post(dt, race, time);
+    this.rocks.post();
+  }
+
+  endLeap(st, landed) {
+    st.leap = null;
+    st.leapt = true;
+    st.landT = landed ? 1.2 : 0.01;
+    this.hz.events.push({ type: 'landed', st });
+  }
+
+  // HUD: metres between the player and the lava front, while the flow is chasing
+  get gap() { return this.flow.gapToPlayer; }
+
+  dispose() {
+    for (const h of this.heaves) h.dispose();
+    this.rocks.dispose();
+    this.flow.dispose();
+    for (const fs of this.fissures) { fs.mat.map.dispose(); fs.mat.dispose(); fs.mesh.geometry.dispose(); }
+  }
+}
+
+function crackTexture(rnd) {
+  const cv = document.createElement('canvas');
+  cv.width = 512; cv.height = 64;
+  const g = cv.getContext('2d');
+  // one jagged line, drawn twice: a wide soft glow, then the bright core
+  const pts = [];
+  let y = 32;
+  for (let x = 0; x <= 512; x += 14) { y = clamp(y + (rnd() - 0.5) * 18, 10, 54); pts.push([x, y]); }
+  for (const [w, col, blur] of [[9, 'rgba(255,90,20,0.55)', 18], [3, 'rgba(255,210,120,0.95)', 6]]) {
+    g.strokeStyle = col; g.lineWidth = w; g.shadowColor = col; g.shadowBlur = blur; g.lineJoin = 'round';
+    g.beginPath();
+    pts.forEach(([x, py], k) => (k ? g.lineTo(x, py) : g.moveTo(x, py)));
+    g.stroke();
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// Lava fountains in the crater lake: glowing gobs thrown up from vents, stretched along their flight, cooling
+// from yellow-white to dark red as they fall back. A truck's leap sets off columns along its path, timed to burst
+// up past it at the height it flies through.
+class Fountains {
+  constructor(hz, crater, lite) {
+    this.hz = hz; this.crater = crater;
+    const N = this.N = lite ? 700 : 2000;
+    this.mesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshBasicMaterial({ color: 0xffffff }), N);
+    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(N * 3), 3).setUsage(THREE.DynamicDrawUsage);
+    this.mesh.frustumCulled = false;
+    hz.group.add(this.mesh);
+    this.p = new Float32Array(N * 3); this.v = new Float32Array(N * 3);
+    this.age = new Float32Array(N); this.size = new Float32Array(N); this.alive = new Uint8Array(N);
+    this.next = 0;
+    this.jets = [];
+    this.rnd = mulberry(99);
+    this.ambT = 0;
+    this.m = new THREE.Matrix4(); this.s = new THREE.Vector3(); this.c = new THREE.Color(); this.q = new THREE.Quaternion();
+    const zero = new THREE.Matrix4().makeScale(0, 0, 0);
+    for (let i = 0; i < N; i++) this.mesh.setMatrixAt(i, zero);
+  }
+
+  jet(x, z, v0, spread, rate, dur, size = 1) { this.jets.push({ x, z, v0, spread, rate, dur, size, acc: 0 }); }
+
+  surge(L, big) {
+    const cr = this.crater;
+    for (const fr of [0.3, 0.42, 0.5, 0.58, 0.7]) {
+      const x = L.from.x + (L.to.x - L.from.x) * fr, z = L.from.z + (L.to.z - L.from.z) * fr;
+      if (Math.hypot(x - cr.x, z - cr.z) > cr.r - 12) continue;
+      const tf = L.T * fr;
+      // the truck's height above the lake when it passes over this vent
+      const vy0 = (L.to.y - L.from.y) / L.T + 0.5 * GRAV * L.T;
+      const h = L.from.y + vy0 * tf - 0.5 * GRAV * tf * tf - cr.y;
+      const v0 = (h + 0.5 * GRAV * tf * tf) / tf;
+      // lateral jitter so the columns flank the truck rather than hitting it square
+      const side = (this.rnd() < 0.5 ? -1 : 1) * (4 + this.rnd() * 7);
+      const dx = L.to.z - L.from.z, dz = -(L.to.x - L.from.x), dl = Math.hypot(dx, dz);
+      this.jet(x + dx / dl * side, z + dz / dl * side, v0 * (1.02 + this.rnd() * 0.15), 2.6, big ? 170 : 60, L.T * 0.75, big ? 1.3 : 1);
+    }
+  }
+
+  spawn(x, z, v0, spread, size) {
+    const i = this.next; this.next = (this.next + 1) % this.N;
+    const r = this.rnd;
+    this.p[i * 3] = x + (r() - 0.5) * 3; this.p[i * 3 + 1] = this.crater.y + 0.5; this.p[i * 3 + 2] = z + (r() - 0.5) * 3;
+    const s = v0 * (0.82 + r() * 0.3);
+    this.v[i * 3] = (r() - 0.5) * 2 * spread; this.v[i * 3 + 1] = s; this.v[i * 3 + 2] = (r() - 0.5) * 2 * spread;
+    this.age[i] = 0; this.size[i] = size * (0.45 + r() * r() * 1.4); this.alive[i] = 1;
+  }
+
+  update(dt, time, erupting) {
+    const cr = this.crater, r = this.rnd;
+    // the lake always bubbles; once the volcano erupts the vents roar and a great column stands in the middle
+    this.ambT -= dt;
+    if (this.ambT <= 0) {
+      this.ambT = erupting ? 0.5 + r() * 0.7 : 1.4 + r() * 1.6;
+      const a = r() * 6.283, d = r() * (cr.r - 25);
+      this.jet(cr.x + Math.cos(a) * d, cr.z + Math.sin(a) * d, erupting ? 26 + r() * 26 : 9 + r() * 12, erupting ? 4 : 2.5, erupting ? 60 : 22, 0.8 + r() * 1.2, 1);
+      if (erupting && r() < 0.35) this.jet(cr.x + (r() - 0.5) * 10, cr.z + (r() - 0.5) * 10, 44 + r() * 16, 3.5, 110, 1.6 + r(), 1.3);
+    }
+    for (const j of this.jets) {
+      j.dur -= dt;
+      j.acc += j.rate * dt;
+      while (j.acc >= 1) { j.acc -= 1; this.spawn(j.x, j.z, j.v0, j.spread, j.size); }
+    }
+    this.jets = this.jets.filter((j) => j.dur > 0);
+    const { p, v, m, s, c, q } = this;
+    const mesh = this.mesh;
+    const drag = Math.exp(-dt * 0.05);
+    for (let i = 0; i < this.N; i++) {
+      if (!this.alive[i]) continue;
+      const k = i * 3;
+      v[k + 1] -= GRAV * dt;
+      v[k] *= drag; v[k + 2] *= drag;
+      p[k] += v[k] * dt; p[k + 1] += v[k + 1] * dt; p[k + 2] += v[k + 2] * dt;
+      this.age[i] += dt;
+      const inLake = Math.hypot(p[k] - cr.x, p[k + 2] - cr.z) < cr.r - 4;
+      const floor = inLake ? cr.y : this.hz.world.heightAt(p[k], p[k + 2]);
+      if (v[k + 1] < 0 && p[k + 1] < floor) {
+        this.alive[i] = 0;
+        m.makeScale(0, 0, 0); mesh.setMatrixAt(i, m);
+        if (inLake && r() < 0.04) this.hz.fx.fire.emit(tmp.set(p[k], cr.y + 0.5, p[k + 2]), tmp2.set(0, 1.5, 0), 1.6, time, 0.5);
+        continue;
+      }
+      const sp = Math.hypot(v[k], v[k + 1], v[k + 2]);
+      const sz = this.size[i];
+      s.set(sz, sz, sz * (1 + sp * 0.12));
+      q.setFromUnitVectors(FWD, tmp.set(v[k], v[k + 1], v[k + 2]).divideScalar(Math.max(sp, 1e-3)));
+      m.compose(tmp2.set(p[k], p[k + 1], p[k + 2]), q, s);
+      mesh.setMatrixAt(i, m);
+      // white-hot from the vent, cooling as it flies
+      const heat = Math.exp(-this.age[i] / 3.2);
+      c.setRGB(0.7 + 1.3 * heat, 0.07 + 0.5 * heat * heat, 0.01 + 0.1 * heat ** 3);
+      mesh.setColorAt(i, c);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.instanceColor.needsUpdate = true;
+  }
+}
+
+// The lava flow on the descent: a glowing sheet laid over the road from the landing to the finish, revealed
+// up to the advancing front. It sets off once the player is over the crater and runs at a pace a clean,
+// quick truck can just stay ahead of; it closes in if the player is too far ahead, so the pressure stays on.
+class LavaFlow {
+  constructor(eru, lavaGroup) {
+    this.eru = eru;
+    const hz = eru.hz, t = eru.t, W = t.width;
+    this.a = eru.land; this.b = t.n - 1;
+    this.hw = W / 2 + 3.5;
+    const NU = 8, verts = [], uvs = [], idx = [];
+    let rows = 0;
+    for (let i = this.a; i <= this.b; i += 2) {
+      const f = t.frame(i);
+      for (let k = 0; k <= NU; k++) {
+        const lat = (k / NU * 2 - 1) * this.hw;
+        const x = f.x + f.nx * lat, z = f.z + f.nz * lat;
+        verts.push(x, hz.world.heightAt(x, z) + 0.42 - (lat / this.hw) ** 2 * 0.2, z);
+        uvs.push(i - this.a, lat);
+      }
+      rows++;
+    }
+    for (let j = 0; j < rows - 1; j++) for (let k = 0; k < NU; k++) {
+      const a = j * (NU + 1) + k, b = a + 1, c = a + NU + 1, d = c + 1;
+      idx.push(a, b, c, b, d, c);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    this.uFront = { value: -50 };
+    const mat = lavaGroup.userData.makeMat(true);
+    const base = mat.onBeforeCompile, uFront = this.uFront, edge = (this.hw - 2.2).toFixed(2);
+    mat.onBeforeCompile = (sh, r) => {
+      base(sh, r);
+      sh.uniforms.uFront = uFront;
+      sh.fragmentShader = sh.fragmentShader.replace('uniform float uTime;', 'uniform float uTime; uniform float uFront;')
+        .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
+float eN = texture(tNoise, vW.xz / 13.0).r;
+if (vT.x > uFront + (eN - 0.5) * 9.0) discard;
+if (abs(vT.y) > ${edge} + eN * 2.2) discard;`)
+        .replace('totalEmissiveRadiance += lavaEm;', `totalEmissiveRadiance += lavaEm;
+// fresh lava: it glows right through its thin crust, white-hot at the front and dimming over the next few
+// hundred metres as it crusts over
+float behind = uFront - vT.x;
+float fresh = 1.0 - smoothstep(0.0, 40.0, behind);
+float warm = 1.0 - smoothstep(0.0, 400.0, behind);
+float vein = smoothstep(0.35, 0.75, texture(tNoise, vW.xz / 6.0 + vec2(uTime * 0.02, 0.0)).g);
+totalEmissiveRadiance += vec3(1.0, 0.26, 0.04) * (0.35 + 0.9 * warm) * (0.5 + vein) + vec3(2.4, 0.8, 0.14) * fresh * (0.7 + 0.3 * eN);`);
+    };
+    mat.customProgramCacheKey = () => 'lava-flow';
+    this.mesh = new THREE.Mesh(geo, mat);
+    this.mesh.visible = false;
+    hz.group.add(this.mesh);
+    this.light = new THREE.PointLight(0xff5a1a, 0, 80, 1.8);
+    hz.group.add(this.light);
+    // pace: how fast a truck can take each metre of the descent, from the bends and the braking into them
+    const n = t.n, vp = new Float32Array(n);
+    for (let i = 0; i < n; i++) vp[i] = Math.min(44, Math.sqrt(9 / Math.max(Math.abs(t.curv[i]), 1e-4)));
+    for (let i = n - 2; i >= 0; i--) vp[i] = Math.min(vp[i], Math.sqrt(vp[i + 1] ** 2 + 12));
+    for (let i = 1; i < n; i++) vp[i] = Math.min(vp[i], Math.sqrt(vp[i - 1] ** 2 + 7));
+    this.pace = vp;
+    this.state = 'wait';
+    this.front = this.a - 30;
+    this.gapToPlayer = null;
+    this.rnd = mulberry(7);
+  }
+
+  pre(dt, race, time) {
+    const pl = race.player, eru = this.eru;
+    if (this.state === 'wait') {
+      // pours over the rim once the player is across (or out), when the rest of the field is across too,
+      // or twenty seconds on for anyone still to come: they will land in it
+      if ((pl.leapt && !pl.leap) || pl.dnf || pl.finished) { this.state = 'delay'; this.T = 0; }
+      return;
+    }
+    if (this.state === 'delay') {
+      this.T += dt;
+      // ...and the last of them has got clear of the rim
+      const across = race.cars.every((c) => c.finished || (c.leapt && !c.leap && c.i > this.a + 120));
+      if ((across && this.T > 1.5) || this.T > 20) { this.state = 'run'; this.runT = 0; this.mesh.visible = true; this.front = this.a; eru.hz.events.push({ type: 'flow' }); (this.log ||= []).push(`start t${race.t.toFixed(0)} lead ${Math.max(...race.cars.map((c) => c.i))}`); }
+      return;
+    }
+    const i = Math.min(this.b, Math.floor(this.front));
+    // it gathers pace over the first few seconds as it spills over the rim
+    this.runT += dt;
+    let v = clamp(this.pace[i] * 0.7, 8, 32) * Math.min(1, 0.3 + this.runT / 4);
+    // the player gets no breathing space: more than 130 m clear and the flow speeds up to close in, unless
+    // it is already right behind someone else
+    const alive = !pl.finished;
+    const gap = pl.i - this.front;
+    const chasing = race.cars.some((c) => !c.finished && c !== pl && c.i - this.front > 0 && c.i - this.front < 80);
+    if (alive && gap > 130 && !chasing) v *= 1 + Math.min(0.45, (gap - 130) / 150);
+    this.front = Math.min(this.b + 20, this.front + v * dt);
+    this.uFront.value = this.front - this.a;
+    this.gapToPlayer = alive ? Math.max(0, gap) : null;
+    const f = eru.t.frame(Math.min(this.b, Math.floor(this.front)));
+    this.light.position.set(f.x, f.y + 4, f.z);
+    this.light.intensity = 260 * (0.85 + 0.15 * Math.sin(time * 4));
+    // smoke and spatter rolling off the front
+    const fx = eru.hz.fx;
+    for (let k = 0; k < 2; k++) {
+      const lat = (this.rnd() - 0.5) * 2 * this.hw * 0.8;
+      const x = f.x + f.nx * lat, z = f.z + f.nz * lat, y = eru.hz.world.heightAt(x, z) + 0.8;
+      const c = 0.07 + this.rnd() * 0.06;
+      fx.smoke.emit(tmp.set(x, y, z), tmp2.set(f.tx * v * 0.3, 2 + this.rnd() * 2, f.tz * v * 0.3), 1.8 + this.rnd() * 1.5, time, 4, c, c * 0.92, c * 0.88);
+      if (this.rnd() < 0.35) fx.fire.emit(tmp.set(x, y, z), tmp2.set(f.tx * v * 0.5, 1, f.tz * v * 0.5), 1 + this.rnd(), time, 0.5);
+    }
+  }
+
+  post(dt, race, time) {
+    if (this.state !== 'run') return;
+    for (const st of race.cars) {
+      if (st.finished || st.burned) continue;
+      if (st.leap || st.i < this.a + 2 || this.front - st.i < 1.5) continue;
+      this.burn(st, race, time);
+    }
+  }
+
+  burn(st, race, time) {
+    const v = st.v, d = v.damage;
+    st.burned = true;
+    (this.log ||= []).push(`${st.v.name.slice(0, 3)}@${st.i}t${race.t.toFixed(0)}`);
+    if (d) { d.level = 1; d.burning = 1; d.totaledAt = true; }
+    const p = v.body.translation(), lv = v.body.linvel();
+    this.eru.hz.fx.explode(new THREE.Vector3(p.x, p.y + 0.5, p.z), time, 1.2, new THREE.Vector3(lv.x, lv.y, lv.z));
+    v.body.setLinvel({ x: lv.x * 0.3, y: lv.y, z: lv.z * 0.3 }, true);
+    this.eru.hz.events.push({ type: 'burned', st });
+    race.retire(st);
+  }
+
+  dispose() { this.mesh.geometry.dispose(); this.mesh.material.dispose(); }
+}
+
+// Heavy rocks lying across the descent. Sleeping rigid bodies until a truck hits one; the AI steers round them.
+class RoadRocks {
+  constructor(eru) {
+    this.eru = eru;
+    const hz = eru.hz, t = eru.t, W = t.width, rnd = mulberry(311);
+    t.obstacles = [];
+    this.list = [];
+    const a = eru.land + 160, b = eru.seg.loopB - 40, N = 18;
+    for (let k = 0; k < N; k++) {
+      let i = Math.round(a + (b - a) * (k + 0.2 + rnd() * 0.6) / N);
+      // not in the middle of a hairpin
+      const bendy = (c) => { let m = 0; for (let j = c - 30; j <= c + 30; j += 3) m = Math.max(m, Math.abs(t.curv[t.wrap(j)])); return m > 1 / 45; };
+      for (let s = 0; s < 30 && bendy(i); s++) i += 5;
+      const f = t.frame(i);
+      const r = 1.25 + rnd() * 0.8;
+      const lat = (rnd() * 2 - 1) * (W / 2 - 2.2);
+      const x = f.x + f.nx * lat, z = f.z + f.nz * lat;
+      const sx = r, sy = r * 0.72, sz = r * 0.9, br = r * 0.25;
+      const y = hz.world.heightAt(x, z) + sy * 0.8;
+      const body = hz.phys.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x, y, z).setSleeping(true).setCanSleep(true)
+        .setRotation(tq.setFromAxisAngle(UP, rnd() * 6.283)).setLinearDamping(0.4).setAngularDamping(0.8));
+      hz.phys.createCollider(RAPIER.ColliderDesc.roundCuboid(sx - br, sy - br, sz - br, br).setMass(2400 + r * 2200).setFriction(1)
+        .setRestitution(0.1).setCollisionGroups(G_ROCK), body);
+      const mesh = new THREE.Mesh(hz.geos[k % 4], hz.rockMat);
+      mesh.scale.set(sx * 1.05, sy * 1.25, sz * 1.05);
+      mesh.castShadow = true; mesh.receiveShadow = true;
+      hz.group.add(mesh);
+      const o = { i, lat, r: Math.max(sx, sz), body, mesh };
+      this.sync(o);
+      this.list.push(o);
+      t.obstacles.push(o);
+    }
+  }
+
+  sync(o) {
+    const p = o.body.translation(), q = o.body.rotation();
+    o.mesh.position.set(p.x, p.y, p.z);
+    o.mesh.quaternion.set(q.x, q.y, q.z, q.w);
+  }
+
+  post() {
+    const t = this.eru.t;
+    for (const o of this.list) {
+      if (o.body.isSleeping()) continue;
+      this.sync(o);
+      const p = o.body.translation();
+      const near = t.nearest(p, o.i);
+      o.i = near.i;
+      const f = t.frame(o.i);
+      o.lat = (p.x - f.x) * f.nx + (p.z - f.z) * f.nz;
+    }
+  }
+
+  dispose() {
+    for (const o of this.list) this.eru.hz.phys.removeRigidBody(o.body);
+    this.eru.t.obstacles = [];
+  }
+}

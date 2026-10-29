@@ -7,7 +7,8 @@ const POINTS = [10, 8, 6, 5, 4, 3, 2, 1];
 export const EVENTS = [
   { track: 'village', laps: 3, note: 'Street circuit through the village and round the fields' },
   { track: 'summit', laps: 1, note: 'Point-to-point hill climb to the lookout below the crater' },
-  { track: 'caldera', laps: 2, note: 'The main event: a full lap of the volcano and the lava jump' },
+  { track: 'caldera', laps: 2, note: 'A full lap of the volcano and the lava jump' },
+  { track: 'eruption', laps: 1, note: 'The finale: up to the crater, a leap across it, and a race against the lava down the far side' },
 ];
 
 export function fmt(t) {

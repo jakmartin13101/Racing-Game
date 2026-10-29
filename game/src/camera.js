@@ -29,6 +29,8 @@ export class CameraRig {
   bump(a) { this.kick = Math.min(0.5, (this.kick || 0) + a); }
   // slow-motion wreck shot from beside the bonnet
   cinematic(on) { this.cine = on ? { a: Math.random() < 0.5 ? 0.9 : -0.9 } : null; if (!on) this.snap = true; }
+  // the crater leap: a run of shots across the flight, chosen by how far through it the truck is
+  leapShot(L, crater) { this.leapL = L ? { L, crater, shot: -1 } : null; this.snap = true; }
   next() {
     const i = CAMERAS.findIndex((c) => c.id === this.mode);
     this.setMode(CAMERAS[(i + 1) % CAMERAS.length].id);
@@ -59,6 +61,7 @@ export class CameraRig {
       cam.fov = 48; cam.updateProjectionMatrix();
       return;
     }
+    if (this.leapL) { this.leapCam(dt, p); return; }
     if (this.mode === 'inspect') {
       // debug: fixed three-quarter view of the truck, angle from ?ia=
       const ia = +(new URLSearchParams(location.search).get('ia') || 0.8);
@@ -147,6 +150,41 @@ export class CameraRig {
     cam.fov += (fov - cam.fov) * (this.snap ? 1 : k);
     cam.updateProjectionMatrix();
     this.snap = false;
+  }
+
+  leapCam(dt, p) {
+    const cam = this.camera, S = this.leapL, L = S.L;
+    cam.up.set(0, 1, 0);
+    const u = THREE.MathUtils.clamp(L.t / L.T, 0, 1);
+    const dir = new THREE.Vector3(L.to.x - L.from.x, 0, L.to.z - L.from.z).normalize();
+    const side = new THREE.Vector3(dir.z, 0, -dir.x);
+    const shot = u < 0.32 ? 0 : u < 0.68 ? 1 : 2;
+    const cut = shot !== S.shot;
+    S.shot = shot;
+    let want, look, fov;
+    if (shot === 0) {
+      // alongside as it leaves the lip
+      want = tmp.copy(p).addScaledVector(side, 13).addScaledVector(dir, 6).add(up.set(0, 0.5, 0));
+      look = aim.copy(p);
+      fov = 58;
+    } else if (shot === 1) {
+      // high on the other side, looking down past the truck at the lava lake and the fountains coming up at it
+      want = tmp.copy(p).addScaledVector(side, -17).addScaledVector(dir, -5).add(up.set(0, 9, 0));
+      look = aim.copy(p).addScaledVector(dir, 4).add(up.set(0, -14, 0));
+      fov = 66;
+    } else {
+      // over the shoulder onto the landing
+      want = tmp.copy(p).addScaledVector(dir, -15).add(up.set(0, 6.5, 0));
+      look = aim.copy(p).addScaledVector(dir, 24).add(up.set(0, -4, 0));
+      fov = 64;
+    }
+    if (cut) { this.pos.copy(want); this.look.copy(look); } else {
+      this.pos.lerp(want, 1 - Math.exp(-dt * 10));
+      this.look.lerp(look, 1 - Math.exp(-dt * 14));
+    }
+    cam.position.copy(this.pos);
+    cam.lookAt(this.look);
+    cam.fov = fov; cam.updateProjectionMatrix();
   }
 
   // terrain, buildings or rocks between a and b

@@ -15,7 +15,7 @@ from PIL import Image
 from scipy.ndimage import gaussian_filter, uniform_filter1d
 from scipy.spatial import cKDTree
 
-OUT = os.path.join(os.path.dirname(__file__), '..', 'public', 'world')
+OUT = os.environ.get('WORLD_OUT') or os.path.join(os.path.dirname(__file__), '..', 'public', 'world')
 os.makedirs(OUT, exist_ok=True)
 
 EXTENT = 3072.0          # metres across
@@ -68,10 +68,13 @@ PEAK = 900.0
 warp = spectral(2.6, 1.5, seed=1) * 0.08
 Rw = R * (1 + warp) * (1 + 0.06 * np.cos(A - 0.6))
 cone = 640.0 * np.exp(-Rw / 330.0) + 300.0 * np.exp(-Rw / 120.0) + 40 * np.exp(-(Rw / 900.0) ** 2)
-# flatten summit and cut a crater bowl
-cone = np.minimum(cone, PEAK * 0.84)
-crater = 170 * np.clip(1 - (R / 135.0) ** 2, 0, 1) ** 1.2
+# the summit blew off long ago: a plateau ring round a deep crater bowl with a lava lake (Eruption jumps it)
+SUMMIT = 560.0
+CRATER_R = 88.0
+cone = np.minimum(cone, SUMMIT)
+crater = 128 * np.clip(1 - (R / CRATER_R) ** 4, 0, 1) ** 0.8
 cone -= crater
+cone += 5 * np.exp(-((R - CRATER_R - 4) / 6) ** 2)  # raised rim
 # radial erosion gullies, stronger high up the flank
 gul = np.zeros_like(R)
 for k, (freq, amp) in enumerate([(31, 1.0), (57, 0.6), (97, 0.4), (161, 0.25)]):
@@ -318,6 +321,120 @@ th = smooth(grade_limit(th, 0.08, True), 31, True)
 TRACKS.append(dict(id='village', name='Ashfall Village', kind='circuit', closed=True, C=C, th=th, gap=np.zeros(len(C), bool),
                    width=13.0, start=20, laps=3, bankK=8, centre=VC.tolist()))
 
+# --- Eruption: the finale. Up from the southern plain, onto the Caldera Loop and over its lava jump, off up
+# switchbacks on the north-east cone to the summit plateau, a jump right across the crater, then switchbacks
+# down the southern cone, a short run on the loop and out to a finish on the plain.
+loop = TRACKS[0]
+LC, LT = loop['C'], loop['th']
+NL = len(LC)
+
+
+def polar1(a, r):
+    return np.array([r * math.cos(math.radians(a)), r * math.sin(math.radians(a))])
+
+
+def piece(ctrl):
+    C, _ = catmull(np.array(ctrl, float), False)
+    return C
+
+
+def legs_pts(legs, step=2.0):
+    # concentric arcs joined by semicircular hairpins (same as the sprint's serpentine)
+    return serpentine(legs, polar1(legs[0][1], legs[0][0]), step_deg=step)[1:]
+
+
+I_MERGE, I_DIVERGE = 175, 1325        # climb runs on the loop between these indices (incl. its lava jump)
+I_MERGE2, I_EXIT = 2690, 2765          # descent joins the loop here and leaves it for the plain
+lipR, LIP_A, LAND_A = CRATER_R + 6, -60.0, 120.0
+approach = piece([polar1(103, 1010), polar1(101, 900), polar1(98, 780), polar1(95, 680), polar1(92, 600), polar1(89, 568),
+                  LC[I_MERGE - 40], LC[I_MERGE]])
+# leave the loop inward with a wide U-turn, then seven switchbacks up the north-east cone to the rim
+up = piece(np.vstack([[LC[I_DIVERGE]], [LC[I_DIVERGE + 10]],
+    [polar1(-69, 308), polar1(-74, 300), polar1(-78.5, 288), polar1(-79, 274), polar1(-76, 264), polar1(-72, 261)],
+    legs_pts([(262, -70, 4), (240, 4, -78), (215, -78, 4), (190, 4, -78), (166, -78, 4), (144, 4, -48)]),
+    [polar1(-55, 138), polar1(-59, 124), polar1(-60, 112), polar1(LIP_A, lipR)]]))
+gapC = piece([polar1(LIP_A, lipR), polar1(LIP_A, lipR * 0.5), [0.0, 0.0], polar1(LAND_A, lipR * 0.5), polar1(LAND_A, lipR)])
+# the landing runs out across the cinder rim in a long sweeping bend before the first switchback
+down = piece(np.vstack([[polar1(LAND_A, lipR)], [polar1(LAND_A, 112)], [polar1(LAND_A - 1.5, 128)], [polar1(LAND_A - 4.5, 142)],
+    [polar1(LAND_A - 9, 154)], [polar1(LAND_A - 14, 163)],
+    legs_pts([(170, 100, 55), (196, 55, 135), (222, 135, 55), (249, 55, 135), (277, 135, 55), (306, 55, 135),
+              (336, 135, 55), (368, 55, 135), (402, 135, 130)]),
+    [polar1(126, 430), polar1(124, 462), polar1(122, 495), LC[I_MERGE2 - 25], LC[I_MERGE2]]]))
+out = piece([LC[I_EXIT], LC[I_EXIT + 30], polar1(104, 610), polar1(106, 680), polar1(109, 760), polar1(111, 840), polar1(113, 930), polar1(114.5, 1020), polar1(115.5, 1110)])
+segs = [('approach', approach[:-1]), ('loopA', LC[I_MERGE:I_DIVERGE]), ('up', up[:-1]), ('gap', gapC[:-1]),
+        ('down', down[:-1]), ('loopB', LC[I_MERGE2:I_EXIT]), ('out', out)]
+C = np.vstack([c for _, c in segs])
+kind = np.concatenate([np.full(len(c), k) for k, (_, c) in enumerate(segs)])
+# round off the joins between pieces, then hold the shared loop sections exactly on the loop
+Cs = gaussian_filter1d(C, 3, axis=0, mode='nearest')
+shared = (kind == 1) | (kind == 5)
+Cs[shared] = C[shared]
+C = Cs
+ground = sample(H, C[:, 0], C[:, 1])
+th = smooth(smooth(ground, 61, False), 31, False)
+# pinned heights: the shared loop sections, the summit lip with its kicker, the crater gap and the landing
+pin = np.zeros(len(C), bool)
+P = np.zeros(len(C))
+for k in (1, 5):
+    idx = np.where(kind == k)[0]
+    lo_i = [I_MERGE, I_MERGE2][k == 5]
+    pin[idx] = True
+    P[idx] = LT[lo_i:lo_i + len(idx)]
+gi = np.where(kind == 3)[0]
+lip, land = gi[0], gi[-1] + 1
+plateau = float(np.median(sample(H, *polar1(LIP_A, 118)[:, None])))
+pin[lip - 45:lip] = True
+P[lip - 45:lip] = plateau + ss(0, 1, np.linspace(0, 1, 45)) * 3.2
+pin[gi] = True
+P[gi] = np.linspace(P[lip - 1], plateau - 1.5, len(gi))
+pin[land:land + 45] = True
+P[land:land + 45] = plateau - 1.5 - np.linspace(0, 45, 45) * 0.08
+
+
+def grade_limit_pinned(v, g, pin, P):
+    """Closest g-Lipschitz profile that passes through the pinned heights."""
+    n = len(v)
+    U = np.where(pin, P, np.inf)
+    L = np.where(pin, P, -np.inf)
+    for i in range(1, n):
+        U[i] = min(U[i], U[i - 1] + g)
+        L[i] = max(L[i], L[i - 1] - g)
+    for i in range(n - 2, -1, -1):
+        U[i] = min(U[i], U[i + 1] + g)
+        L[i] = max(L[i], L[i + 1] - g)
+    f = np.clip(v, L, U)
+    f = np.clip(grade_limit(f, g, False), L, U)
+    f[pin] = P[pin]
+    return f
+
+
+# where the free road runs within a road's width of the loop (merging, leaving, the U-turn off it), it takes
+# the loop's height, so the two carves agree and no wall is left between them
+loop_tree = cKDTree(LC)
+dl, jl = loop_tree.query(C)
+close = (dl < 26) & ~pin & np.isin(kind, [0, 2, 4, 6])
+pin[close] = True
+P[close] = LT[jl[close]]
+th = grade_limit_pinned(th, 0.195, pin, P)
+# smooth the free road, fading the smoothing out towards the pinned stretches so the joins stay exact
+near = np.convolve(pin.astype(float), np.ones(31) / 31, mode='same')
+th = th + (smooth(th, 21, False) - th) * np.clip(1 - near * 3, 0, 1) * ~pin
+gapE = np.zeros(len(C), bool)
+gapE[gi] = True
+# copy the loop's own lava-river gap on the shared section
+lg = np.where(loop['gap'])[0]
+for j in lg:
+    if I_MERGE <= j < I_DIVERGE:
+        gapE[np.where(kind == 1)[0][0] + (j - I_MERGE)] = True
+skip = np.zeros(len(C), bool)
+skip[gi] = True
+segstart = {name: int(np.where(kind == k)[0][0]) for k, (name, _) in enumerate(segs)}
+TRACKS.append(dict(id='eruption', name='Eruption', kind='sprint', closed=False, C=C, th=th, gap=gapE, skip=skip,
+                   width=13.0, start=20, laps=1, bankK=10, runout=180, segs=segstart, lip=int(lip), land=int(land),
+                   loopJump=int(segstart['loopA'] + loop['jump'] - I_MERGE),
+                   shared=[[segstart['loopA'], segstart['up']], [segstart['loopB'], segstart['out']]]))
+print('  eruption pieces', segstart, 'lip', lip, 'land', land)
+
 for t in TRACKS:
     t['T'], t['N'], curv = frames(t['C'], t['closed'])
     t['bank'] = np.clip(curv * t['bankK'], -0.09, 0.09)
@@ -326,9 +443,11 @@ for t in TRACKS:
 
 # ------------------------------------------------------------- village plots
 print('village')
-allC = np.vstack([t['C'] for t in TRACKS])
-allW = np.concatenate([np.full(len(t['C']), t['width']) for t in TRACKS])
-allH = np.concatenate([t['th'] for t in TRACKS])
+# the crater gap carves nothing and paints no road
+keep = np.concatenate([~t.get('skip', np.zeros(len(t['C']), bool)) for t in TRACKS])
+allC = np.vstack([t['C'] for t in TRACKS])[keep]
+allW = np.concatenate([np.full(len(t['C']), t['width']) for t in TRACKS])[keep]
+allH = np.concatenate([t['th'] for t in TRACKS])[keep]
 road_tree = cKDTree(allC)
 vt = TRACKS[2]
 brng = np.random.default_rng(11)
@@ -414,9 +533,9 @@ for b in buildings:
 
 # ------------------------------------------------------------- carve terrain
 print('carve')
-allN = np.vstack([t['N'] for t in TRACKS])
-allB = np.concatenate([t['bank'] for t in TRACKS])
-allGap = np.concatenate([t['gap'] for t in TRACKS])
+allN = np.vstack([t['N'] for t in TRACKS])[keep]
+allB = np.concatenate([t['bank'] for t in TRACKS])[keep]
+allGap = np.concatenate([t['gap'] for t in TRACKS])[keep]
 d, idx = road_tree.query(pts_all, distance_upper_bound=90)
 fin = np.isfinite(d)
 idx = np.where(fin, idx, 0)
@@ -437,6 +556,7 @@ gapmask = allGap[idx] & (d < half + 6)
 Hc = np.where(gapmask, np.minimum(Hc, allH[idx] - 9), Hc)
 H = np.where(d < 1e8, Hc, H)
 H = gaussian_filter(H, 0.6)
+np.save(f'{OUT}/../er_nat.npy' if os.environ.get('WORLD_OUT') else '/tmp/claude-0/er_nat.npy', sample(nat, TRACKS[3]['C'][:, 0], TRACKS[3]['C'][:, 1]))
 
 # ------------------------------------------------------------- lava surfaces
 riv_out = []
@@ -471,12 +591,16 @@ def track_json(t):
             out[k] = int(t[k])
     if 'centre' in t:
         out['villageCentre'] = t['centre']
+    for k in ('segs', 'lip', 'land', 'loopJump', 'shared', 'runout'):
+        if k in t:
+            out[k] = t[k]
     return out
 
 
 world = dict(
     extent=EXTENT, grid=GRID, hmin=hmin, hmax=hmax, peak=PEAK,
     rivers=riv_out, lake=dict(x=float(lake_c[0]), z=float(lake_c[1]), r=lake_r, y=lake_level),
+    crater=dict(x=0.0, z=0.0, r=CRATER_R, y=float(sample(H, [0.0], [0.0])[0]) + 40),
     tracks=[track_json(t) for t in TRACKS], buildings=buildings,
 )
 json.dump(world, open(f'{OUT}/track.json', 'w'))

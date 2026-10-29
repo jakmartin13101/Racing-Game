@@ -48,10 +48,18 @@ export class AIDriver {
     // straighten up through tight corners
     const turn = t.turnAhead(i, 0, 40);
     laneGoal *= 1 - Math.min(1, turn.total / 0.9) * 0.7;
+    // rocks lying on the road (Eruption's descent): pick the side with more room and go round
+    let dodge = false;
+    for (const o of t.obstacles || []) {
+      const ahead = o.i - i;
+      if (ahead < 3 || ahead > 80) continue;
+      const clear = o.r + 2.5;
+      if (Math.abs(laneGoal - o.lat) < clear) { laneGoal = o.lat + (o.lat > 0 ? -clear : clear); dodge = true; }
+    }
     const lim = t.width * 0.36;
     laneGoal = Math.max(-lim, Math.min(lim, laneGoal));
-    for (const j of t.jumps) if (t.wrap(j.at - state.i) < 200) laneGoal = 0;
-    this.lane += (laneGoal - this.lane) * Math.min(1, dt * 1.2);
+    for (const j of t.jumps) { const dj = t.ahead(state.i, j.at); if (dj >= 0 && dj < 200) laneGoal = 0; }
+    this.lane += (laneGoal - this.lane) * Math.min(1, dt * (dodge ? 3 : 1.2));
 
     // steering: pure pursuit on a point ahead along the line
     const look = Math.round(7 + spd * 0.5);
@@ -75,8 +83,10 @@ export class AIDriver {
     // keep off the brakes on the lava jump approach so it clears the gap
     let jumping = false;
     for (const j of t.jumps) {
-      const dj = t.wrap(j.at - i);
+      const dj = t.ahead(i, j.at);
       if (dj > 0 && dj < 220) { target = Math.max(target, dj < 140 ? j.flat : j.speed); jumping ||= dj < 160 && j.flat >= 50; }
+      // a heave ramp with nothing to clear: take it steady rather than flying it flat out
+      if (j.max && dj > 0 && dj < 160) target = Math.min(target, j.max);
     }
     // occasional small mistakes on easier settings
     if (this.rnd() < this.diff.mistakes * dt * 0.2) this.lift = 0.6 + this.rnd() * 0.8;

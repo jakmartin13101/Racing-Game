@@ -9,15 +9,21 @@ export class Track {
     this.n = this.c.length;
     // the start/finish line sits under the gantry, the grid forms up behind it
     this.line = data.start + 20;
-    this.finishRel = this.closed ? this.n : this.n - 40 - this.line;
+    this.finishRel = this.closed ? this.n : this.n - (data.runout ?? 40) - this.line;
     // jumps the AI must take flat out; track events (the lava breakout ramp) add their own while active.
     // land: where a truck that fell short is put back down
     this.jumps = [];
-    if (data.jump != null) {
-      let land = data.jump;
+    // Eruption runs over the Caldera Loop's lava jump on its way up
+    const jump = data.jump ?? data.loopJump;
+    if (jump != null) {
+      let land = jump;
       while (this.at(land)[4]) land = this.wrap(land + 1);
-      this.jumps.push({ at: data.jump, speed: 38, flat: 60, land: this.wrap(land + 20) });
+      this.jumps.push({ at: jump, speed: 38, flat: 60, land: this.wrap(land + 20) });
     }
+    // the crater leap: launched by the eruption itself, so the AI just drives to the lip.
+    // guard: a truck that crashes this close to the lip is put down on the far side
+    if (data.lip != null) this.jumps.push({ at: data.lip, speed: 0, flat: 0, land: data.land + 25, guard: 45, crater: true });
+    this.sharedRows = data.shared || [];
     // heading change per metre, smoothed, for AI braking and corner props
     const head = [];
     for (let i = 0; i < this.n; i++) {
@@ -38,6 +44,12 @@ export class Track {
       this.curv[i] = s / (2 * R + 1);
     }
   }
+
+  // rows that run on another track's road (Eruption borrows two stretches of the Caldera Loop)
+  isShared(i) { return this.sharedRows.some(([a, b]) => i >= a && i < b); }
+
+  // metres from row a forward to row b; negative when b is behind a on a sprint
+  ahead(a, b) { return this.closed ? this.wrap(b - a) : b - a; }
 
   wrap(i) { return this.closed ? ((i % this.n) + this.n) % this.n : Math.min(Math.max(i, 0), this.n - 1); }
   at(i) { return this.c[this.wrap(i)]; }

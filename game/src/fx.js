@@ -56,7 +56,8 @@ export function buildPlume(world, M, sunDir) {
   }
   geo.setAttribute('seed', new THREE.InstancedBufferAttribute(seeds, 4));
   geo.instanceCount = COUNT;
-  const top = world.heightAt(0, 0) + 60;
+  // the column rises from well above the crater lake, so trucks leaping the crater fly in clear air beneath it
+  const top = Math.max(world.heightAt(0, 0) + 60, (world.data.crater?.y ?? 0) + 200);
   const mat = new THREE.ShaderMaterial({
     transparent: true, depthWrite: false,
     uniforms: {

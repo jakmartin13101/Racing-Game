@@ -249,6 +249,7 @@ export function buildTrackRibbon(world, M, track) {
   const c = track.centre;
   const W = track.width;
   const closed = track.closed;
+  const shared = track.shared || [];
   const across = [-1.6, -1.25, -1.0, -0.85, -0.7, -0.55, -0.4, -0.25, -0.12, 0, 0.12, 0.25, 0.4, 0.55, 0.7, 0.85, 1.0, 1.25, 1.6];
   const n = c.length;
   const verts = [], uvs = [], idx = [];
@@ -273,6 +274,7 @@ export function buildTrackRibbon(world, M, track) {
   const m = across.length;
   for (let i = 0; i < rows - 1; i++) {
     if (c[i][4] && c[(i + 1) % n][4]) continue; // lava gap at the jump
+    if (shared.some(([a, b]) => i >= a && i + 1 < b)) continue; // drawn by the track it borrows
     for (let j = 0; j < m - 1; j++) {
       const a = i * m + j, b = a + 1, cc = a + m, d = cc + 1;
       idx.push(a, b, cc, b, d, cc);
@@ -446,8 +448,9 @@ lavaN = normalize(mix(lavaN, vec3(0,0,1), molten * 0.7));
   lake.position.set(lk.x, lk.y + 1.0, lk.z);
   group.add(lake);
   // crater lava pool
-  const crater = new THREE.Mesh(new THREE.CircleGeometry(80, 64).rotateX(-Math.PI / 2), makeMat(false));
-  crater.position.set(0, world.heightAt(0, 0) + 6, 0);
+  const cr = world.data.crater || { x: 0, z: 0, r: 86, y: world.heightAt(0, 0) + 6 };
+  const crater = new THREE.Mesh(new THREE.CircleGeometry(cr.r - 2, 96).rotateX(-Math.PI / 2), makeMat(false));
+  crater.position.set(cr.x, cr.y, cr.z);
   group.add(crater);
   group.userData.uniforms = lavaUniforms;
   group.userData.makeMat = makeMat;

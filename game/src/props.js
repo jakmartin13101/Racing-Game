@@ -132,6 +132,7 @@ export async function buildProps(world, scene, M, quality, tracks) {
     const urban = track.id === 'village';
     // --------------------------------------------------------- rocks along the track
     for (let i = 0; i < n; i += 5) {
+      if (track.isShared(i)) continue;
       const f = frame(i);
       for (const side of [-1, 1]) {
         if (rnd() > 0.5) continue;
@@ -171,7 +172,7 @@ export async function buildProps(world, scene, M, quality, tracks) {
     }
     // tyre walls on the outside of tight corners
     for (let i = 0; i < n; i += 6) {
-      if (!track.closed && (i < 12 || i > n - 12)) continue;
+      if ((!track.closed && (i < 12 || i > n - 12)) || track.isShared(i)) continue;
       const a = frame(i - 10), b = frame(i + 10);
       const turn = a.tx * b.tz - a.tz * b.tx;
       if (Math.abs(turn) < 0.25) continue;
@@ -193,14 +194,16 @@ export async function buildProps(world, scene, M, quality, tracks) {
     }
     // wreckage and scrap rims scattered around
     for (let k = 0; k < 30; k++) {
-      const f = frame(Math.floor(rnd() * n));
+      const fi = Math.floor(rnd() * n);
+      if (track.isShared(fi) || track.c[fi][4]) continue;
+      const f = frame(fi);
       const lat = (rnd() < 0.5 ? -1 : 1) * (W / 2 + 4 + rnd() * 12);
       const x = f.x + f.nx * lat, z = f.z + f.nz * lat;
       if (!nearTrack(world, x, z, W / 2 + 3)) put('rusted_wheel_rim_02', x, z, rnd() * 6.28, 0.7, { align: 1, tilt: 2.5 });
     }
     // start gantry, and a finish gantry at the top of a sprint
     group.add(buildGate(frame(track.line), world, W, `GRAVEL RIOT · ${track.name.toUpperCase()}`));
-    if (!track.closed) group.add(buildGate(frame(track.line + track.finishRel), world, W, 'FINISH · SUMMIT LOOKOUT'));
+    if (!track.closed) group.add(buildGate(frame(track.line + track.finishRel), world, W, track.id === 'eruption' ? 'FINISH · ERUPTION' : 'FINISH · SUMMIT LOOKOUT'));
     if (track.id === 'caldera') group.add(buildShed(world, padX - pad.tx * 18, padZ - pad.tz * 18, pad.yaw));
   }
   for (let i = 0; i < quality.fieldRocks; i++) {

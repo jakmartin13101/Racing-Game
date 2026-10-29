@@ -16,8 +16,8 @@ npm run dist:win   # Windows installer -> release/GravelRiot-Setup.exe (needs ma
 
 ## Modes and tracks
 
-- **World Race**: a three-round championship (Ashfall Village, Summit Sprint, Caldera Loop) with
-  10-8-6-5-4-3-2-1 points and standings after each round.
+- **World Race**: a four-round championship (Ashfall Village, Summit Sprint, Caldera Loop, and Eruption as
+  the finale) with 10-8-6-5-4-3-2-1 points and standings after each round.
 - **Quick Race**: any track, 0 to 7 opponents, easy / normal / hard AI, lap count, truck paint.
 - **Settings**: graphics preset (low / medium / high / ultra), frame-rate cap (30 / 60 / uncapped), camera, touch
   steering style (buttons or tilt), auto-accelerate, steering assist, FPS counter, driver name.
@@ -31,6 +31,14 @@ Tracks share one volcano map:
   steady rain of glowing volcanic bombs, small and large. A red ring marks where each one will land.
 - **Summit Sprint** (3.2 km, point to point): switchbacks from the foothills up to the summit lookout.
   Boulders roll off the slopes, and bombs fall on the upper half.
+- **Eruption** (8.2 km, point to point, the finale): from the plain at the foot of the volcano, along the
+  Caldera Loop's flank and over its lava jump, then seven switchbacks to the crater rim. On the way up the
+  ground heaves up into ramps, quakes crack glowing fissures across the road, one switchback floods with lava
+  behind its ramp, and the sky darkens as the volcano wakes. Near the top it erupts. Every truck that reaches
+  the lip is flung right across the crater (about 190 m) through fountains of lava, and the player's leap
+  plays in slow motion with its own camera shots. On the far side lava pours over the rim behind the pack
+  and chases it down nine switchbacks to the finish on the plain; heavy rocks lie on the road, and a truck
+  the lava catches is burned out (DNF). The HUD shows how far back the lava is.
 
 The browser and phones cap at 30 fps and default to lighter graphics; the desktop app runs uncapped at high.
 
@@ -72,8 +80,8 @@ Cameras: chase, far chase, hood, bumper and trackside TV.
 
 `tools/truck/split.py` cuts the breakable parts out of the baked truck models.
 
-URL options: `?race=caldera|village|summit`, `&ai=N`, `&laps=N`, `&diff=easy|normal|hard`, `&cam=...`,
-`?q=low|medium|high|ultra`, `?sub=N` (physics substeps), `?nofog`, `?noshafts`, `?nodof`, `?noskid`, `?fps=N`, `?auto` (autopilot), `?blow` (force an engine blow), `?at=N&yaw=R&ram=V` (crash test), `?still=N` (render one frame after N simulated steps,
+URL options: `?race=caldera|village|summit|eruption`, `&ai=N`, `&laps=N`, `&diff=easy|normal|hard`, `&cam=...`,
+`?q=low|medium|high|ultra`, `?sub=N` (physics substeps), `?nofog`, `?noshafts`, `?nodof`, `?noskid`, `?fps=N`, `?auto` (autopilot), `?blow` (force an engine blow), `?at=N&yaw=R&ram=V` (crash test), `?lava=N` (Eruption: start the lava N m behind the truck placed with `at`), `?trace` (log truck progress), `?still=N` (render one frame after N simulated steps,
 used for headless captures).
 
 ## Code
@@ -81,7 +89,7 @@ used for headless captures).
 `src/main.js` (app state and loop), `world.js` (terrain, materials, lava), `track.js` (track geometry
 queries), `vehicle.js` (truck physics and visuals), `ai.js` (opponent drivers), `race.js` (grid, laps,
 respawns, results), `camera.js` (the TV camera checks its line of sight and moves when terrain or a building gets in the way),
-`hazards.js` (bombs, boulders, the Caldera lava breakout), `ultra.js` (height fog, sun shafts, depth of field, tyre marks), `damage.js`, `crash.js`, `fx.js` (smoke, fire,
+`hazards.js` (bombs, boulders, the Caldera lava breakout), `eruption.js` (Eruption's heaves, fissures, crater leap, lava fountains, lava flow and road rocks), `ultra.js` (height fog, sun shafts, depth of field, tyre marks), `damage.js`, `crash.js`, `fx.js` (smoke, fire,
 motion blur), `input.js` (keyboard, gamepad, touch, tilt), `ui.js` / `ui.css` (menus,
 HUD), `settings.js` (presets and saved settings), `props.js` and `village.js` (scenery). The desktop
 wrapper is `electron/main.cjs`, and `electron/installer.nsi` builds the installer.

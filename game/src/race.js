@@ -72,8 +72,8 @@ export class Race {
     (st.respLog ||= []).push(`${st.i}${why}`);
     // never respawn on the run-up to the lava gap: put the truck down on the landing side instead
     for (const j of t.jumps) {
-      const ahead = t.wrap(j.at - st.lastSafe);
-      if (ahead >= 0 && ahead < 160) st.lastSafe = j.land;
+      const ahead = t.ahead(st.lastSafe, j.at);
+      if (ahead >= 0 && ahead < (j.guard ?? 160)) st.lastSafe = j.land;
     }
     const f = t.frame(st.lastSafe);
     const lat = st.isPlayer ? 0 : (st.ai?.lane ?? 0) * 0.5;

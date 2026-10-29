@@ -20,6 +20,9 @@ import { settings, saveSettings, quality as qualityPreset, platform } from './se
 import { mulberry } from './world.js';
 
 const params = new URLSearchParams(location.search);
+// ?trace: every half second, each truck's row, speed and wheels down (for headless test runs)
+const TRACE = params.has('trace') ? (window.__trace = { n: 0, rows: [] }) : null;
+const SLOW = params.has('slow') ? (window.__slow = { min: 1, real: 0, slowFor: 0 }) : null;
 const S = settings();
 const quality = qualityPreset();
 const $ = (id) => document.getElementById(id);
@@ -43,7 +46,7 @@ loadStep(0.05, 'LOADING SKY…');
 const { sun } = await buildSky(renderer, scene);
 // Ultra: ash haze that pools in the valleys and glows towards the sun (patches shaders before any compile)
 if (ULTRA && !params.has('nofog')) patchHeightFog(sun);
-const fogColor = new THREE.Color(0.62, 0.64, 0.66);
+const fogColor = new THREE.Color(0.62, 0.64, 0.66), fogHot = new THREE.Color(0.5, 0.33, 0.27);
 scene.fog = new THREE.FogExp2(fogColor, 0.00028);
 
 const sunLight = new THREE.DirectionalLight(0xfff0dc, 2.8);
@@ -163,7 +166,7 @@ if (S.touchUi && S.touchSteer === 'tilt') input.enableTilt();
 let race = null, raceCfg = null, state = 'menu', menuT = 0;
 const hud = {
   root: $('hud'), pos: $('pos'), poscount: $('poscount'), lap: $('lap'), laps: $('laps'), lapline: $('lapline'), track: $('trackname'),
-  time: $('time'), best: $('best'), speed: $('speed'), gear: $('gear'), rpm: $('rpmbar'), boost: $('boostbar'), dmg: $('dmgbar'), boostWrap: $('boost'), msg: $('msg'), board: $('board'), map: $('map'), fps: $('fps'), toast: $('toast'),
+  time: $('time'), best: $('best'), lavagap: $('lavagap'), speed: $('speed'), gear: $('gear'), rpm: $('rpmbar'), boost: $('boostbar'), dmg: $('dmgbar'), boostWrap: $('boost'), msg: $('msg'), board: $('board'), map: $('map'), fps: $('fps'), toast: $('toast'),
 };
 let mapBase = null, mapFn = null;
 
@@ -221,7 +224,7 @@ function startRace(cfg) {
     playerPaint: cfg.paint ?? 0, quality, playerName: S.driver || 'YOU', seed: (cfg.seed ?? Date.now()) & 0xffff, crash,
   });
   race.hazards = new Hazards({ phys, scene, world, track, fx: crashFx, M, lava, rockMat: props.models.boulder_01?.meshes[0]?.mat, quality, events: race.events });
-  slowT = 0; timeScale = 1; rig.cinematic(false);
+  slowT = 0; timeScale = 1; leapSlow = null; rig.cinematic(false); rig.leapShot(null);
   hud.dmg.style.width = '0%';
   hud.msg.dataset.fin = '';
   if (params.has('auto')) race.player.ai = new AIDriver(race.player.v, track, DIFFICULTY.hard, mulberry(99));
@@ -267,7 +270,7 @@ function updateHud(dt) {
   if (st.finished && hud.msg.dataset.fin !== '1') {
     hud.msg.dataset.fin = '1';
     const p = race.positionOf(st);
-    hud.msg.textContent = st.dnf ? 'DNF' : p === 1 ? 'WINNER!' : `P${p}`;
+    hud.msg.textContent = st.dnf ? (st.burned ? 'CAUGHT BY THE LAVA' : 'DNF') : p === 1 ? 'WINNER!' : `P${p}`;
     hud.msg.classList.remove('pop'); void hud.msg.offsetWidth; hud.msg.classList.add('pop');
   }
   if (!st.finished) hud.msg.dataset.fin = '';
@@ -277,6 +280,10 @@ function updateHud(dt) {
   hud.gear.textContent = st.v.speed() < 1 && st.v.input.brake > 0 ? 'R' : st.v.gear;
   hud.rpm.style.width = `${Math.round(Math.min(1, st.v.rpm / 7000) * 100)}%`;
   hud.boost.style.width = `${Math.round(st.v.boost * 100)}%`;
+  // Eruption's descent: how far back the lava is
+  const lg = race.hazards?.erupt?.gap;
+  hud.lavagap.hidden = lg == null;
+  if (lg != null) { hud.lavagap.textContent = `LAVA ${Math.round(lg)} M`; hud.lavagap.classList.toggle('near', lg < 45); }
   // running order, top four plus the player
   let html = '';
   race.order.forEach((c, k) => {
@@ -306,6 +313,8 @@ const clock = new THREE.Clock();
 let t = 0, accum = 0, lastFrame = 0, fpsAvg = 60;
 // slow motion for the player's engine blowing: slowT counts down in real seconds
 let slowT = 0, timeScale = 1;
+// the crater leap: slow motion for the whole flight, slowest over the middle of the crater
+let leapSlow = null;
 let msgT = 0, blurAmt = 0;
 function bigMsg(txt, hold = 2.2) { hud.msg.textContent = txt; hud.msg.classList.remove('pop'); void hud.msg.offsetWidth; hud.msg.classList.add('pop'); msgT = hold; }
 function raceEvents() {
@@ -320,7 +329,17 @@ function raceEvents() {
     } else if (e.type === 'totaled') {
       if (me && !e.st.v.damage.blown) bigMsg('TOTALED');
       else if (!me && !e.st.v.damage.blown) toast(`${e.st.v.name} is wrecked`);
-    } else if (e.type === 'dnf' && me) bigMsg('DNF');
+    } else if (e.type === 'dnf' && me) { if (!e.st.burned) bigMsg('DNF'); }
+    else if (e.type === 'leap') {
+      if (me) { leapSlow = e.leap; rig.leapShot(e.leap, world.data.crater); }
+      rig.bump(me ? 0.35 : 0.08);
+    } else if (e.type === 'landed' && me) { if (leapSlow) leapSlow.done = true; rig.leapShot(null); rig.bump(0.3); }
+    else if (e.type === 'burned') {
+      if (me) { slowT = 6; rig.cinematic(true); bigMsg('CAUGHT BY THE LAVA', 4); }
+      else toast(`${e.st.v.name} was caught by the lava`);
+    } else if (e.type === 'erupt') { toast('The volcano is erupting!'); rig.bump(0.4); }
+    else if (e.type === 'flow') { toast('Lava over the rim! Go!'); rig.bump(0.3); }
+    else if (e.type === 'heave' && race.player.i < e.i && e.i - race.player.i < 260) { toast('The ground is splitting!'); rig.bump(0.25); }
     else if (e.type === 'quake') rig.bump(Math.min(0.35, e.k ?? 0.15));
     else if (e.type === 'breakout') { toast('Lava breakout ahead!'); rig.bump(0.3); }
     else if (e.type === 'loose' && me && e.label) toast(`${e.label} hanging loose`);
@@ -336,12 +355,15 @@ function simulate(dt) {
     const raw = input.read();
     accum += dt;
     let n = 0;
-    while (accum >= 1 / 60 && n++ < 5) {
-      if (race.player.ai) race.player.ai.update(1 / 60, race.player, race.cars.map((c) => c.v), 0);
+    // in slow motion the fixed step shrinks with time, so the physics still advances every frame
+    const h = (1 / 60) * THREE.MathUtils.clamp(timeScale, 0.2, 1);
+    while (accum >= h - 1e-9 && n++ < 5) {
+      if (race.player.ai) race.player.ai.update(h, race.player, race.cars.map((c) => c.v), 0);
       const pin = race.player.ai ? { ...race.player.v.input, analog: true } : raw;
       if (params.has('blow') && race.clock > 1.5) { race.player.v.forceBlow = true; pin.boost = 1; pin.throttle = 1; if (race.player.v.boost > 0.12) race.player.v.boost = 0.12; }
-      race.step(1 / 60, pin, S.steerAssist && !race.player.ai);
-      accum -= 1 / 60;
+      race.step(h, pin, S.steerAssist && !race.player.ai);
+      if (TRACE && (TRACE.n++ % 30) === 0) TRACE.rows.push(`${race.t.toFixed(1)} ` + race.cars.map((c) => `${c.i}:${c.v.speed().toFixed(0)}:${c.v.contacts}${c.leap ? 'L' : ''}`).join(' '));
+      accum -= h;
     }
     raceEvents();
     if (race.done && !race.shownResults) {
@@ -356,13 +378,23 @@ function simulate(dt) {
   }
 }
 
-function frame(real) {
+function slowMotion(real) {
   // engine blow: about three seconds at a fifth of normal speed, easing back over the next three
   if (slowT > 0) {
     slowT = Math.max(0, slowT - real);
     timeScale = slowT > 2.6 ? 0.2 : 0.2 + 0.8 * (1 - slowT / 2.6) ** 2;
     if (slowT === 0) { timeScale = 1; rig.cinematic(false); }
   }
+  if (leapSlow && state !== 'paused') {
+    const u = leapSlow.done ? 1 : THREE.MathUtils.clamp(leapSlow.t / leapSlow.T, 0, 1);
+    const goal = leapSlow.done ? 1 : 0.74 - 0.42 * Math.sin(Math.PI * u);
+    timeScale += (goal - timeScale) * Math.min(1, real * (leapSlow.done ? 4 : 5));
+    if (leapSlow.done && timeScale > 0.97) { timeScale = 1; leapSlow = null; }
+  }
+}
+
+function frame(real) {
+  slowMotion(real);
   const dt = state === 'paused' ? real : real * timeScale;
   t += dt;
   simulate(dt);
@@ -370,12 +402,12 @@ function frame(real) {
     race.sync(dt, t, dust, camera.position);
     if (state !== 'paused') rig.update(real, race.player.v, race.track, race.player.i, race.player.v.boosting);
     const pv = race.player.v, spd = pv.speed();
-    const inCar = rig.cine ? 0 : 1;
+    const inCar = rig.cine || rig.leapL ? 0 : 1;
     // camera motion blur grows with speed; boost adds a radial streak, redline adds colour fringing
     const fast = THREE.MathUtils.clamp((spd - 12) / 40, 0, 1);
     mblur.uniforms.get('uRadial').value = inCar * (fast * 0.012 + (pv.boosting ? 0.03 : 0));
     mblur.uniforms.get('uAber').value = inCar * ((pv.boosting ? 0.6 : 0) + (pv.redline ? 1.4 : 0));
-    blurAmt = rig.cine ? 0.25 : 0.55 + fast * 0.35;
+    blurAmt = rig.cine || rig.leapL ? 0.25 : 0.55 + fast * 0.35;
     focus.copy(race.player.v.group.position);
     updateHud(real);
   } else {
@@ -385,6 +417,13 @@ function frame(real) {
     blurAmt = 0.3;
     focus.set(camera.position.x * 0.5, 0, camera.position.z * 0.5);
   }
+  // Eruption: the sky closes in as the pack climbs and burns red once the volcano blows
+  const envK = race?.hazards?.env ?? 0;
+  scene.fog.color.copy(fogColor).lerp(fogHot, envK * 0.55);
+  scene.fog.density = 0.00028 * (1 + envK * 0.8);
+  sunLight.intensity = 2.8 * (1 - envK * 0.3);
+  plume.material.uniforms.uFogColor.value.copy(scene.fog.color);
+  plume.material.uniforms.uFogDensity.value = scene.fog.density;
   lava.userData.uniforms.uTime.value = t;
   plume.material.uniforms.uTime.value = t + 400;
   ash.material.uniforms.uTime.value = t;
@@ -427,6 +466,9 @@ if (params.has('race')) {
     const yaw = f.yaw + +(params.get('yaw') || 0);
     race.place(race.player, race.track.wrap(+params.get('at')), f.x, f.z, yaw);
     race.clock = 0;
+    // ?lava=N sets Eruption's lava flow running N m behind the truck, for screenshots
+    const er = race.hazards?.erupt;
+    if (er && params.has('lava')) Object.assign(er.flow, { state: 'run', runT: 9, front: race.player.i - +params.get('lava') }).mesh.visible = true;
     // ?ram=N launches the truck straight ahead at N m/s, for crash tests
     if (params.has('ram')) {
       const sp = +params.get('ram');
@@ -447,6 +489,9 @@ if (still) {
     order: race.order.map((c) => ({ name: c.v.name, dist: Math.round(c.dist), lap: c.lap, fin: c.finished, dnf: !!c.dnf, time: c.time && +c.time.toFixed(1), resp: (c.respLog || []).join(' '),
       dmg: +(c.v.damage?.level || 0).toFixed(2), lost: [...(c.v.damage?.lost || [])].join(','), blown: !!c.v.damage?.blown, log: (c.v.damage?.log || []).join(' ') })),
     hz: race.hazards && { bombs: race.hazards.bombs.length, marks: race.hazards.marks.length, boulders: race.hazards.boulders.length, rolled: race.hazards.nBoulders || 0, dropped: race.hazards.nBombs || 0, lava: race.hazards.lava?.state, hits: race.hazards.hits || 0 },
+    er: race.hazards?.erupt && { flow: race.hazards.erupt.flow.state, front: Math.round(race.hazards.erupt.flow.front), heaves: race.hazards.erupt.heaves.map((h) => `${h.i0}:${h.state}`).join(' '),
+      fiss: race.hazards.erupt.fissures.length, rocks: race.track.obstacles.map((o) => o.i).join(','), leapt: race.cars.filter((c) => c.leapt).length,
+      burned: (race.hazards.erupt.flow.log || []).join(' '), erupting: !!race.hazards.erupt.erupting },
     knocked: breakables.items.filter((i) => i.state !== 'static').length, props: breakables.items.length, debris: debris.list.length };
   window.__race = race; window.__fx = crashFx; window.__skids = skids;
   window.__ready = true;
@@ -454,7 +499,10 @@ if (still) {
   window.__ready = true;
   requestAnimationFrame(loop);
 }
-function frameNoRender(dt) {
+function frameNoRender(real) {
+  // ?slow: headless runs play slow motion too (normally they skip it, to simulate faster)
+  if (SLOW) { slowMotion(real); SLOW.min = Math.min(SLOW.min, timeScale); SLOW.real += real; if (timeScale < 0.99) SLOW.slowFor += real; }
+  const dt = SLOW ? real * timeScale : real;
   t += dt;
   simulate(dt);
   if (race) { race.sync(dt, t, null, camera.position); rig.update(dt, race.player.v, race.track, race.player.i, false); }

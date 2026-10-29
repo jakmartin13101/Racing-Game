@@ -62,6 +62,11 @@ button { font: inherit; color: inherit; }
 #toast { position: absolute; left: 50%; bottom: 22vh; transform: translateX(-50%); font-size: clamp(16px, 2vw, 22px);
   font-weight: 600; letter-spacing: .12em; text-transform: uppercase; background: var(--panel); padding: .3em 1em; opacity: 0; transition: opacity .3s; }
 #toast.on { opacity: 1; }
+#lavagap { position: absolute; left: 50%; top: 13vh; transform: translateX(-50%); font-size: clamp(18px, 2.4vw, 28px); font-weight: 800;
+  letter-spacing: .14em; color: #ffb27a; background: rgba(60,14,4,.55); border: 2px solid rgba(255,90,20,.7); padding: .2em .9em;
+  text-shadow: 0 0 12px rgba(255,90,20,.8); }
+#lavagap.near { color: #fff; background: rgba(170,30,6,.75); animation: lavapulse .5s ease-in-out infinite alternate; }
+@keyframes lavapulse { to { box-shadow: 0 0 28px rgba(255,80,10,.9); } }
 
 /* ------------------------------------------------------------ touch */
 #touch { position: fixed; inset: 0; pointer-events: none; font-family: var(--font); }
@@ -138,8 +143,8 @@ body:not(.desktop) .desktop-only { display: none; }
 .swatches button:focus-visible, .swatches button.focus { outline: 2px solid var(--amber-hi); outline-offset: 2px; }
 .note { margin: 0; color: var(--amber-hi); min-height: 1.2em; font-size: 15px; letter-spacing: .04em; }
 
-.events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-width: 620px; counter-reset: ev; }
-.events li { counter-increment: ev; display: flex; align-items: baseline; gap: 14px; background: var(--panel); padding: 10px 16px; }
+.events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-width: 620px; counter-reset: ev; }
+.events li { counter-increment: ev; display: flex; align-items: baseline; gap: 14px; background: var(--panel); padding: 6px 16px; }
 .events li::before { content: counter(ev); font-weight: 800; font-size: 26px; color: var(--amber); font-style: italic; width: 1em; }
 .events b { font-size: 21px; text-transform: uppercase; font-weight: 800; }
 .events span { color: var(--dim); font-size: 15px; }

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import RAPIER from '@dimforge/rapier3d-compat';
 import { Vehicle, PAINTS } from './vehicle.js';
 import { AIDriver, DIFFICULTY } from './ai.js';
 import { mulberry } from './world.js';
@@ -11,8 +12,11 @@ export const DRIVERS = [
 
 // One race: grid, countdown, laps or sprint distance, positions, respawns and results.
 export class Race {
-  constructor({ phys, scene, assets, track, opponents, difficulty, laps, playerPaint, quality, playerName, seed = 1 }) {
-    Object.assign(this, { phys, scene, track, laps: track.closed ? laps : 1 });
+  constructor({ phys, scene, assets, track, opponents, difficulty, laps, playerPaint, quality, playerName, seed = 1, crash = null }) {
+    Object.assign(this, { phys, scene, track, crash, laps: track.closed ? laps : 1 });
+    this.eq = new RAPIER.EventQueue(true);
+    this.byCollider = new Map();
+    this.events = [];
     const rnd = mulberry(seed * 977 + 13);
     this.diff = DIFFICULTY[difficulty] || DIFFICULTY.normal;
     this.cars = [];
@@ -25,10 +29,11 @@ export class Race {
       const isPlayer = k === playerSlot;
       const d = isPlayer ? { name: playerName || 'YOU', number: 27 } : DRIVERS[ai % DRIVERS.length];
       const paint = isPlayer ? PAINTS[playerPaint] : PAINTS[paints[ai % paints.length]];
-      const v = new Vehicle({ phys, scene, assets, paint, isPlayer, name: d.name, number: d.number, lodOnly: !isPlayer && quality.aiLod });
+      const v = new Vehicle({ phys, scene, assets, paint, isPlayer, name: d.name, number: d.number, lodOnly: !isPlayer && quality.aiLod, crash });
       const st = { v, i: 0, lap: 0, dist: 0, lastSafe: 0, finished: false, time: 0, isPlayer, racing: false, respawn: false };
       if (!isPlayer) { st.ai = new AIDriver(v, track, this.diff, mulberry(seed * 31 + ai * 7 + 1)); ai++; }
       this.cars.push(st);
+      for (const c of v.colliders) this.byCollider.set(c.handle, st);
       const slot = track.gridSlot(k);
       this.place(st, slot.i, slot.x, slot.z, slot.yaw);
     }
@@ -59,6 +64,8 @@ export class Race {
   }
 
   respawn(st, why = '') {
+    // a wreck stays where it is
+    if (st.v.totaled) { st.respawn = false; if (why === 'O' || why[0] === 'L') this.retire(st); return; }
     st.resp = (st.resp || 0) + 1;
     const t = this.track;
     (st.respLog ||= []).push(`${st.i}${why}`);
@@ -105,11 +112,23 @@ export class Race {
         st.ai.update(dt, st, this.cars.map((c) => c.v), st.finished ? 0 : playerDist - st.dist);
         // finished trucks roll on and pull up
         if (st.finished) { st.v.input.throttle = 0; st.v.input.brake = st.v.speed() > 3 ? 0.5 : 0; st.v.input.boost = 0; }
+        if (st.v.totaled) Object.assign(st.v.input, { throttle: 0, brake: 0, boost: 0, hand: 0 });
         if (st.respawn) this.respawn(st, 'S');
       }
       st.v.step(dt, !racing);
     }
-    this.phys.step();
+    // trucks knock trackside props flying before the solver sees them
+    this.crash?.breakables?.step(this.cars.map((c) => c.v), this.t, (v, dv, p, local, it) => {
+      const st = this.cars.find((c) => c.v === v);
+      if (v.damage) v.damage.kind = 'p';
+      v.damage?.hit(local.clone().applyQuaternion(v.group.quaternion), dv, p);
+      if (v.damage) v.damage.kind = '';
+      if (st?.isPlayer) this.events.push({ type: 'knock', name: it.name, dv });
+    });
+    for (const st of this.cars) { const v = st.v.body.linvel(); (st.preV ||= new THREE.Vector3()).set(v.x, v.y, v.z); }
+    this.phys.step(this.eq);
+    this.impacts();
+    this.crash?.debris.sync(dt);
 
     for (const st of this.cars) {
       const p = st.v.body.translation();
@@ -130,6 +149,12 @@ export class Race {
       }
       st.prevRel = r;
       st.dist = this.distOf(st);
+      // totaled trucks roll on; once stopped they are out of the race
+      if (st.v.totaled && !st.finished) {
+        st.deadT = st.v.speed() < 0.8 ? (st.deadT || 0) + dt : 0;
+        if (st.deadT > 1.5) this.retire(st);
+      }
+      for (const e of st.v.damage?.events.splice(0) || []) this.events.push({ ...e, st });
       if (st.isPlayer && assist) {
         const f = t.frame(st.i + 12 + Math.round(st.v.speed() * 0.4));
         const r2 = st.v.body.rotation();
@@ -149,6 +174,8 @@ export class Race {
     }
     // standings: finishers by order, the rest by distance covered
     this.order = this.cars.slice().sort((a, b) => {
+      if (a.dnf !== b.dnf) return a.dnf ? 1 : -1;
+      if (a.dnf && b.dnf) return b.dist - a.dist;
       if (a.finished && b.finished) return a.time - b.time;
       if (a.finished !== b.finished) return a.finished ? -1 : 1;
       return b.dist - a.dist;
@@ -160,12 +187,56 @@ export class Race {
     }
   }
 
+  retire(st) {
+    if (st.finished) return;
+    st.finished = true;
+    st.dnf = true;
+    st.time = null;
+    this.events.push({ type: 'dnf', st });
+    if (st.isPlayer) this.playerFinished = true;
+  }
+
+  // hard contacts on the truck bodies: walls, buildings, other trucks, landing on the roof
+  impacts() {
+    this.eq.drainContactForceEvents((e) => {
+      const h1 = e.collider1(), h2 = e.collider2();
+      const dv = e.totalForceMagnitude() / 60 / 2170;
+      if (dv < 2.4) return;
+      for (const [mine, other] of [[h1, h2], [h2, h1]]) {
+        const st = this.byCollider.get(mine);
+        if (!st?.v.damage) continue;
+        const c1 = this.phys.getCollider(mine), c2 = this.phys.getCollider(other);
+        let dir = null, pt = null;
+        this.phys.contactPair(c1, c2, (man, flipped) => {
+          if (dir) return;
+          const n = man.normal();
+          dir = new THREE.Vector3(n.x, n.y, n.z).multiplyScalar(flipped ? -1 : 1);
+          if (man.numSolverContacts() > 0) { const p = man.solverContactPoint(0); pt = new THREE.Vector3(p.x, p.y, p.z); }
+        });
+        if (!dir) continue;
+        const ground = c2.shapeType() === RAPIER.ShapeType.HeightField;
+        const car = this.byCollider.get(other);
+        // only closing speed counts, so trucks leaning on each other or a wall don't grind themselves to bits
+        const rel = st.preV.clone();
+        if (car) rel.sub(car.preV);
+        const closing = rel.dot(dir);
+        const hit = Math.min(dv, Math.max(0, closing) * 1.1);
+        if (hit < 2.4) continue;
+        st.v.damage.kind = car ? 'c' : ground ? '' : 'w';
+        // another truck shares the hit
+        st.v.damage.hit(dir, car ? hit * 0.6 : hit, pt, ground);
+        st.v.damage.kind = '';
+      }
+    });
+  }
+
   finish() {
     if (this.done) return;
     this.done = true;
     // anyone still running is classified by distance, with a time estimated from their pace
     const goal = this.track.closed ? this.laps * this.track.n : this.track.finishRel;
     for (const st of this.order) {
+      if (!st.finished && st.v.totaled) { st.finished = true; st.dnf = true; st.time = null; continue; }
       if (!st.finished) {
         st.finished = true;
         st.dnf = false;
@@ -173,7 +244,8 @@ export class Race {
         this.finishOrder.push(st);
       }
     }
-    this.results = this.order.map((st, k) => ({ pos: k + 1, name: st.v.name, number: st.v.number, time: st.time, isPlayer: st.isPlayer }));
+    this.order.sort((a, b) => (a.dnf === b.dnf ? (a.dnf ? b.dist - a.dist : a.time - b.time) : a.dnf ? 1 : -1));
+    this.results = this.order.map((st, k) => ({ pos: k + 1, name: st.v.name, number: st.v.number, time: st.time, isPlayer: st.isPlayer, dnf: !!st.dnf }));
   }
 
   positionOf(st) { return this.order.indexOf(st) + 1; }
@@ -190,8 +262,14 @@ export class Race {
     for (const st of this.cars) {
       const d = st.v.group.position.distanceTo(camPos);
       st.v.sync(dt, time, d < 90 ? dust : null, st.isPlayer ? 1 : 0.5);
+      st.v.damage?.update(dt, time);
     }
   }
 
-  dispose() { for (const st of this.cars) st.v.dispose(); }
+  dispose() {
+    for (const st of this.cars) st.v.dispose();
+    this.crash?.debris.clear();
+    this.crash?.breakables?.reset();
+    this.eq.free();
+  }
 }

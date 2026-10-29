@@ -205,7 +205,7 @@ export async function buildVillage(world, scene, M, quality, tracks) {
   const group = new THREE.Group();
   scene.add(group);
   const colliders = [];
-  if (!track) return { group, colliders };
+  if (!track) return { group, colliders, handles: [] };
   const rnd = mulberry(4242);
   const aniso = Math.min(8, quality.terrainStep > 3 ? 4 : 8);
   const mats = Object.fromEntries(['plaster', 'paint', 'brick', 'roof', 'tin', 'wood', 'concrete'].map((k) => [k, texSet(k, aniso)]));
@@ -219,7 +219,7 @@ export async function buildVillage(world, scene, M, quality, tracks) {
   const names = ['dead_tree_trunk', 'dead_tree_trunk_02', 'island_tree_01', 'dry_branches_medium_01', 'shrub_01', 'shrub_02', 'shrub_03', 'shrub_04',
     'street_lamp_01', 'painted_wooden_bench', 'wooden_crate_01', 'Barrel_02', 'wine_barrel_01', 'stone_fire_pit', 'wooden_picnic_table'];
   const models = await loadPropModels(names);
-  const { put, build } = makePlacer(world, models, rnd);
+  const { put, build, handles } = makePlacer(world, models, rnd);
   const vc = track.villageCentre;
   const W = track.width;
   const inCore = (x, z) => Math.hypot(x - vc[0], z - vc[1]) < 190;
@@ -233,7 +233,6 @@ export async function buildVillage(world, scene, M, quality, tracks) {
     const x = f.x + f.nx * side * (W / 2 + 1.2), z = f.z + f.nz * side * (W / 2 + 1.2);
     if (blocked(x, z, 0.6) || nearTrack(world, x, z, W / 2 + 0.6)) continue;
     put('street_lamp_01', x, z, f.yaw + (side > 0 ? Math.PI / 2 : -Math.PI / 2), 4.6, { byHeight: true });
-    colliders.push({ x, y: world.heightAt(x, z), z, w: 0.3, d: 0.3, h: 4, yaw: 0 });
   }
   // benches, barrels and crates against the house fronts; trees and shrubs in gaps and gardens
   for (let k = 0; k < 900; k++) {
@@ -318,7 +317,7 @@ export async function buildVillage(world, scene, M, quality, tracks) {
     const wires = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(wirePts), new THREE.LineBasicMaterial({ color: 0x141210 }));
     group.add(wires);
   }
-  return { group, colliders };
+  return { group, colliders, handles };
 }
 
 function rotate(x, z, a) {

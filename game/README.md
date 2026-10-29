@@ -39,8 +39,21 @@ Y camera, Start pause, Back reset. Touch: left/right pads, gas, brake, boost, ca
 
 Cameras: chase, far chase, hood, bumper and trackside TV.
 
+## Crashes and damage
+
+- **Knock-down props**: barrels, tyres, crates, gas bottles, jerry cans, benches, tables, corner chevrons,
+  concrete barriers and street lamps fly or topple when hit, and take speed off the truck in proportion to their
+  weight. Barriers and lamps stand firm below about 45 and 18 km/h. Buildings and trees are solid.
+- **Truck damage**: hard hits dent the body and scrape the paint, and parts break off by side (mirrors,
+  bumpers, light bar, spare tyres, doors, bonnet). Damage costs power and top speed; at 100% the truck is
+  totaled, coasts to a stop and is out (DNF), unless it rolls over the finish line first.
+- **Boost**: the camera shakes in the last 5% of the tank. Running it dry at full boost blows the engine one
+  time in five: slow motion, bonnet and pistons out, fire and smoke, and the truck is totaled.
+
+`tools/truck/split.py` cuts the breakable parts out of the baked truck models.
+
 URL options: `?race=caldera|village|summit`, `&ai=N`, `&laps=N`, `&diff=easy|normal|hard`, `&cam=...`,
-`?q=low|medium|high`, `?fps=N`, `?auto` (autopilot), `?still=N` (render one frame after N simulated steps,
+`?q=low|medium|high`, `?fps=N`, `?auto` (autopilot), `?blow` (force an engine blow), `?at=N&yaw=R&ram=V` (crash test), `?still=N` (render one frame after N simulated steps,
 used for headless captures).
 
 ## Code
@@ -74,4 +87,5 @@ python tools/import_village.py    # village building materials -> public/texture
 python tools/decimate_props.py    # game-budget rock/prop models -> public/models/env
 python tools/truck/bake.py        # truck model + baked textures -> public/models/truck*
 python tools/truck/lod.py         # low-poly truck for distant opponents
+python tools/truck/split.py       # breakable parts (run after bake.py and lod.py)
 ```

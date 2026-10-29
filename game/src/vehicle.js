@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { Damage } from './damage.js';
 
 const BASE = import.meta.env.BASE_URL;
 const WHEELS = ['wheel_FL', 'wheel_FR', 'wheel_RL', 'wheel_RR'];
@@ -70,6 +71,8 @@ export async function loadTruckAssets(renderer) {
     root.traverse((o) => {
       if (!o.isMesh) return;
       o.castShadow = true; o.receiveShadow = true;
+      // per-vertex damage (scuffed paint), zero until the truck is dented
+      if (o.name === 'body' || o.name.startsWith('part_')) o.geometry.setAttribute('dmg', new THREE.BufferAttribute(new Float32Array(o.geometry.attributes.position.count), 1));
       const name = (o.material?.name || '').replace(/\.\d+$/, '');
       if (mats[name]) o.material = mats[name];
     });
@@ -114,15 +117,22 @@ async function truckMaterials(renderer) {
 
 const paintCache = new Map();
 // Re-colour the paint only: hue-rotate strongly saturated texels, so mud, decals and bare metal keep their look.
+// Damage scrapes the paint back to scratched steel where the `dmg` vertex attribute says the body was hit.
 function paintMaterial(base, paint) {
-  if (!paint.hue && paint.sat === 1 && paint.val === 1) return base;
   const key = paint.name;
   if (paintCache.has(key)) return paintCache.get(key);
   const m = base.clone();
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uPaint = { value: new THREE.Vector3(paint.hue, paint.sat, paint.val) };
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float dmg;\nvarying float vDmg;\nvarying vec3 vLocal;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvDmg = dmg;\nvLocal = position;');
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform vec3 uPaint;')
+      .replace('#include <common>', '#include <common>\nuniform vec3 uPaint;\nvarying float vDmg;\nvarying vec3 vLocal;\nfloat dHash(vec3 p){ return fract(sin(dot(floor(p), vec3(12.9898, 78.233, 37.719))) * 43758.5453); }')
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+float scrape = smoothstep(0.15, 0.9, vDmg * (0.55 + 0.9 * dHash(vLocal * vec3(90.0, 14.0, 90.0))));
+roughnessFactor = mix(roughnessFactor, 0.42, scrape);`)
+      .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = mix(metalnessFactor, 0.9, smoothstep(0.15, 0.9, vDmg * (0.55 + 0.9 * dHash(vLocal * vec3(90.0, 14.0, 90.0)))));')
       .replace('#include <map_fragment>', `#include <map_fragment>
 {
   vec3 c = diffuseColor.rgb;
@@ -135,7 +145,11 @@ function paintMaterial(base, paint) {
   float lum = dot(r, vec3(0.2126, 0.7152, 0.0722));
   r = mix(vec3(lum), r, uPaint.y) * uPaint.z;
   diffuseColor.rgb = mix(c, r, w);
+  float sc = smoothstep(0.15, 0.9, vDmg * (0.55 + 0.9 * dHash(vLocal * vec3(90.0, 14.0, 90.0))));
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.36, 0.35, 0.33) * (0.7 + 0.5 * dHash(vLocal * 260.0)), sc);
+  diffuseColor.rgb *= 1.0 - smoothstep(0.5, 1.0, vDmg) * 0.35;
 }`);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <lights_physical_fragment>', '#include <lights_physical_fragment>\n#ifdef USE_CLEARCOAT\nmaterial.clearcoat *= 1.0 - smoothstep(0.1, 0.6, vDmg);\n#endif');
   };
   m.customProgramCacheKey = () => `paint-${key}`;
   paintCache.set(key, m);
@@ -145,7 +159,11 @@ function paintMaterial(base, paint) {
 function buildVisual(src, paint, mats) {
   const root = src.clone(true);
   const bodyMat = paintMaterial(mats.body, paint);
-  root.traverse((o) => { if (o.isMesh && o.material === mats.body) o.material = bodyMat; });
+  let body = null;
+  root.traverse((o) => {
+    if (o.isMesh && o.material === mats.body) o.material = bodyMat;
+    if (o.isMesh && o.name === 'body') body = o;
+  });
   const wheels = WHEELS.map((n) => {
     const o = root.getObjectByName(n);
     if (!o) return null;
@@ -159,12 +177,12 @@ function buildVisual(src, paint, mats) {
     root.add(pivot);
     return { pivot, spin };
   });
-  return { root, wheels };
+  return { root, wheels, body };
 }
 
 // ---------------------------------------------------------------- vehicle
 export class Vehicle {
-  constructor({ phys, scene, assets, paint = PAINTS[0], lodOnly = false, name = '', number = 0, isPlayer = false }) {
+  constructor({ phys, scene, assets, paint = PAINTS[0], lodOnly = false, name = '', number = 0, isPlayer = false, crash = null }) {
     Object.assign(this, { phys, scene, name, number, isPlayer, paint });
     this.input = { throttle: 0, brake: 0, steer: 0, hand: 0, boost: 0 };
     this.boost = 1;
@@ -181,17 +199,24 @@ export class Vehicle {
     this.group.add(this.lod);
     scene.add(this.group);
     this.createBody();
+    this.damage = crash ? new Damage(this, crash) : null;
   }
+
+  get totaled() { return !!this.damage?.totaled; }
 
   createBody() {
     const T = TUNE;
     const bd = RAPIER.RigidBodyDesc.dynamic().setCanSleep(false).setLinearDamping(0.05).setAngularDamping(0.6);
     this.body = this.phys.createRigidBody(bd);
-    this.phys.createCollider(RAPIER.ColliderDesc.cuboid(T.half.x, T.half.y, T.half.z).setTranslation(0, 0.25, 0)
-      .setMass(T.mass).setFriction(0.4).setRestitution(0.05).setCollisionGroups(G_CAR), this.body);
-    // cab collider so rolling over looks right
-    this.phys.createCollider(RAPIER.ColliderDesc.cuboid(0.8, 0.35, 0.9).setTranslation(0, 0.9, -0.1).setMass(120)
-      .setCollisionGroups(G_CAR), this.body);
+    // both colliders report hard contacts to the damage model
+    const ev = (d) => d.setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS).setContactForceEventThreshold(70000);
+    this.colliders = [
+      this.phys.createCollider(ev(RAPIER.ColliderDesc.cuboid(T.half.x, T.half.y, T.half.z).setTranslation(0, 0.25, 0)
+        .setMass(T.mass).setFriction(0.4).setRestitution(0.05).setCollisionGroups(G_CAR)), this.body),
+      // cab collider so rolling over looks right
+      this.phys.createCollider(ev(RAPIER.ColliderDesc.cuboid(0.8, 0.35, 0.9).setTranslation(0, 0.9, -0.1).setMass(120)
+        .setCollisionGroups(G_CAR)), this.body),
+    ];
     // lower centre of mass for stability
     this.body.setAdditionalMassProperties(400, { x: 0, y: T.comY, z: 0.1 },
       { x: 900, y: 1000, z: 400 }, { w: 1, x: 0, y: 0, z: 0 }, true);
@@ -238,22 +263,41 @@ export class Vehicle {
     vc.setWheelSteering(0, steer);
     vc.setWheelSteering(1, steer);
     let force = 0, brake = 0;
-    const boosting = I.boost && this.boost > 0.02 && I.throttle > 0 && !frozen;
+    const dead = this.totaled;
+    // damage costs power and top speed; a totaled truck only coasts
+    const health = 1 - (this.damage?.level || 0);
+    const pw = this.power * (0.55 + 0.45 * health);
+    // boost runs while the button is held; a fresh press needs a little charge
+    if (!I.boost) this.boostLatch = false;
+    const can = this.boostLatch || this.boost > 0.06;
+    const boosting = !!I.boost && can && this.boost > 0 && I.throttle > 0 && !frozen && !dead;
+    this.boostLatch = boosting;
     this.boosting = boosting;
-    if (I.throttle > 0) force = T.engine * this.power * I.throttle * (1 - Math.min(Math.max(speed, 0) / (T.topSpeed * this.power * (boosting ? 1.25 : 1)), 1) ** 2);
-    if (boosting) { force += T.boost; this.boost = Math.max(0, this.boost - dt * 0.22); }
-    else this.boost = Math.min(1, this.boost + dt * 0.05);
+    this.redline = boosting && this.boost < 0.05;
+    if (I.throttle > 0 && !dead) force = T.engine * pw * I.throttle * (1 - Math.min(Math.max(speed, 0) / (T.topSpeed * (0.7 + 0.3 * health) * this.power * (boosting ? 1.25 : 1)), 1) ** 2);
+    if (boosting) {
+      force += T.boost * (0.6 + 0.4 * health);
+      const before = this.boost;
+      this.boost = Math.max(0, this.boost - dt * 0.22);
+      // running the tank dry at full boost: one in five engines lets go
+      if (before > 0 && this.boost === 0) {
+        this.boostLatch = false;
+        if (this.damage && (this.forceBlow || Math.random() < 0.2)) this.damage.blowEngine();
+      }
+    } else this.boost = Math.min(1, this.boost + dt * 0.05);
     if (I.brake > 0) {
       if (speed > 1) brake = T.brake * I.brake;
       else force = -T.reverse * I.brake;
     }
     if (frozen) { force = 0; brake = 60; }
+    if (dead && I.brake > 0) { force = 0; brake = T.brake * I.brake; }
     for (let i = 0; i < 4; i++) {
       vc.setWheelEngineForce(i, force * (i < 2 ? 0.4 : 0.6));
       vc.setWheelBrake(i, brake * (i < 2 ? 0.6 : 0.4) + (i >= 2 ? I.hand * 40 : 0));
       vc.setWheelSideFrictionStiffness(i, i >= 2 && I.hand ? 0.45 : T.side);
     }
-    if (!I.throttle && !I.brake && !frozen) for (let i = 0; i < 4; i++) vc.setWheelBrake(i, 4);
+    // rolling resistance when coasting, a little more for a wreck
+    if (!frozen && (dead ? !(I.brake > 0) : !I.throttle && !I.brake)) for (let i = 0; i < 4; i++) vc.setWheelBrake(i, dead ? 7 : 4);
     vc.updateVehicle(dt, undefined, RAY_GROUND);
 
     // arcade assists: air control, self-righting, downforce
@@ -308,6 +352,7 @@ export class Vehicle {
   }
 
   dispose() {
+    this.damage?.dispose();
     this.phys.removeVehicleController(this.vc);
     this.phys.removeRigidBody(this.body);
     this.scene.remove(this.group);

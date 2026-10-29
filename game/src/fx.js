@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
+import { Effect, EffectAttribute } from 'postprocessing';
 import { mulberry } from './world.js';
 
 // ---------------------------------------------------------------- sky + sun + env
@@ -223,5 +224,194 @@ export class Dust {
   update(time) {
     this.mat.uniforms.uTime.value = time;
     if (this.dirty) { this.pa.needsUpdate = true; this.va.needsUpdate = true; this.dirty = false; }
+  }
+}
+
+// ---------------------------------------------------------------- crash smoke, fire and sparks
+// Instanced billboards with per-particle birth, velocity, size and life. kind 'smoke' is alpha-blended and lit,
+// 'fire' is additive and runs white -> orange -> dark red over its life; 'spark' is a small hot fire streak.
+export class Puffs {
+  constructor(M, max, kind) {
+    this.max = max; this.i = 0; this.kind = kind;
+    const base = new THREE.PlaneGeometry(1, 1);
+    const geo = new THREE.InstancedBufferGeometry();
+    geo.index = base.index;
+    geo.attributes.position = base.attributes.position;
+    geo.attributes.uv = base.attributes.uv;
+    this.p = new Float32Array(max * 4); this.v = new Float32Array(max * 4); this.c = new Float32Array(max * 4);
+    const mk = (arr, name) => { const a = new THREE.InstancedBufferAttribute(arr, 4); a.setUsage(THREE.DynamicDrawUsage); geo.setAttribute(name, a); return a; };
+    this.attrs = [mk(this.p, 'pb'), mk(this.v, 'vs'), mk(this.c, 'cl')];
+    geo.instanceCount = max;
+    for (let i = 0; i < max; i++) this.p[i * 4 + 3] = -999;
+    const fire = kind !== 'smoke';
+    this.mat = new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, blending: fire ? THREE.AdditiveBlending : THREE.NormalBlending,
+      uniforms: { uTime: { value: 0 }, tSmoke: { value: M.smoke }, uSun: { value: new THREE.Vector3(0, 1, 0) },
+        uRise: { value: fire ? 2.2 : 1.4 }, uGrow: { value: kind === 'spark' ? 0.0 : fire ? 1.4 : 2.6 } },
+      vertexShader: /* glsl */`
+        attribute vec4 pb; attribute vec4 vs; attribute vec4 cl; uniform float uTime, uRise, uGrow;
+        varying vec2 vUv; varying float vAge; varying vec3 vCol; varying vec3 vR, vU, vF;
+        void main() {
+          float t = uTime - pb.w;
+          float life = cl.w;
+          vAge = t < 0.0 || t > life ? 2.0 : t / life;
+          // fire keeps most of its launch speed so flames ride along with a moving wreck
+          float drag = ${kind === 'spark' ? '0.4' : fire ? '0.3' : '1.8'};
+          vec3 p = pb.xyz + vs.xyz * (1.0 - exp(-t * drag)) / drag + vec3(0.0, t * t * ${kind === 'spark' ? '-4.0' : '0.0'} + t * uRise, 0.0);
+          float size = vs.w * (1.0 + t * uGrow);
+          vec4 mv = viewMatrix * vec4(p, 1.0);
+          float rot = fract(pb.w * 7.31) * 6.283 + t * 0.4;
+          vec2 c = vec2(cos(rot), sin(rot));
+          mv.xy += vec2(position.x * c.x - position.y * c.y, position.x * c.y + position.y * c.x) * size;
+          vUv = uv; vCol = cl.rgb;
+          vR = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
+          vU = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
+          vF = vec3(viewMatrix[0][2], viewMatrix[1][2], viewMatrix[2][2]);
+          gl_Position = vAge > 1.0 ? vec4(0.0, 0.0, -2.0, 1.0) : projectionMatrix * mv;
+        }`,
+      fragmentShader: /* glsl */`
+        uniform sampler2D tSmoke; uniform vec3 uSun; varying vec2 vUv; varying float vAge; varying vec3 vCol; varying vec3 vR, vU, vF;
+        void main() {
+          vec4 s = texture2D(tSmoke, vUv);
+          ${fire ? `
+          vec3 hot = mix(vec3(3.0, 1.9, 0.8), vec3(2.2, 0.62, 0.1), smoothstep(0.0, 0.3, vAge));
+          hot = mix(hot, vec3(0.35, 0.05, 0.015), smoothstep(0.3, 1.0, vAge));
+          float a = s.a * (1.0 - smoothstep(0.5, 1.0, vAge)) * smoothstep(0.0, 0.05, vAge + 0.02) * 0.55;
+          gl_FragColor = vec4(hot * vCol * a, a);` : `
+          vec3 n = normalize((s.r * 2.0 - 1.0) * vR + (s.g * 2.0 - 1.0) * vU + (s.b * 2.0 - 1.0) * vF);
+          float lit = clamp(dot(n, uSun) * 0.5 + 0.55, 0.0, 1.0);
+          float a = s.a * smoothstep(0.0, 0.06, vAge) * (1.0 - smoothstep(0.4, 1.0, vAge)) * 0.8;
+          gl_FragColor = vec4(vCol * mix(0.4, 1.3, lit), a);`}
+        }`,
+    });
+    this.mesh = new THREE.Mesh(geo, this.mat);
+    this.mesh.frustumCulled = false;
+    this.mesh.renderOrder = fire ? 6 : 5;
+  }
+  emit(pos, vel, size, time, life = 2, r = 1, g = 1, b = 1) {
+    const i = this.i++ % this.max, k = i * 4;
+    this.p[k] = pos.x; this.p[k + 1] = pos.y; this.p[k + 2] = pos.z; this.p[k + 3] = time;
+    this.v[k] = vel.x; this.v[k + 1] = vel.y; this.v[k + 2] = vel.z; this.v[k + 3] = size;
+    this.c[k] = r; this.c[k + 1] = g; this.c[k + 2] = b; this.c[k + 3] = life;
+    this.dirty = true;
+  }
+  update(time) {
+    this.mat.uniforms.uTime.value = time;
+    if (this.dirty) { for (const a of this.attrs) a.needsUpdate = true; this.dirty = false; }
+  }
+}
+
+// Shared crash effects: smoke, fire, sparks and a flash light for explosions.
+export class CrashFx {
+  constructor(M, scene, sun, lite = false) {
+    this.smoke = new Puffs(M, lite ? 260 : 600, 'smoke');
+    this.fire = new Puffs(M, lite ? 160 : 360, 'fire');
+    this.spark = new Puffs(M, lite ? 120 : 260, 'spark');
+    this.smoke.mat.uniforms.uSun.value.copy(sun);
+    scene.add(this.smoke.mesh, this.fire.mesh, this.spark.mesh);
+    this.flash = new THREE.PointLight(0xff7a2a, 0, 30, 2);
+    scene.add(this.flash);
+    this.flashT = 0;
+    this.time = 0;
+  }
+  // carry: velocity of the thing that exploded, so the fireball travels with it
+  burst(pos, time, power = 1, carry = null) {
+    const v = new THREE.Vector3();
+    const c = carry || new THREE.Vector3();
+    for (let k = 0; k < 30 * power; k++) {
+      v.set(Math.random() - 0.5, Math.random() * 0.9 + 0.2, Math.random() - 0.5).normalize().multiplyScalar(2 + Math.random() * 5 * power).addScaledVector(c, 0.9);
+      this.fire.emit(pos, v, 0.6 + Math.random() * 1.3 * power, time, 0.6 + Math.random() * 0.7);
+    }
+    for (let k = 0; k < 40 * power; k++) {
+      v.set(Math.random() - 0.5, Math.random() * 1.2, Math.random() - 0.5).normalize().multiplyScalar(6 + Math.random() * 14).addScaledVector(c, 0.8);
+      this.spark.emit(pos, v, 0.06 + Math.random() * 0.06, time, 0.5 + Math.random() * 0.9);
+    }
+    for (let k = 0; k < 18 * power; k++) {
+      v.set(Math.random() - 0.5, Math.random() * 0.6 + 0.3, Math.random() - 0.5).normalize().multiplyScalar(1 + Math.random() * 3).addScaledVector(c, 0.6);
+      const g = 0.05 + Math.random() * 0.05;
+      this.smoke.emit(pos, v, 1.2 + Math.random() * 1.6, time + Math.random() * 0.3, 3.5 + Math.random() * 3, g, g, g);
+    }
+    this.flash.position.copy(pos);
+    this.flashT = Math.max(this.flashT, power);
+  }
+  sparks(pos, dir, time, n = 8) {
+    const v = new THREE.Vector3();
+    for (let k = 0; k < n; k++) {
+      v.copy(dir).multiplyScalar(4 + Math.random() * 6).add(new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.8, Math.random() - 0.5).multiplyScalar(6));
+      this.spark.emit(pos, v, 0.04 + Math.random() * 0.05, time, 0.3 + Math.random() * 0.5);
+    }
+  }
+  update(time, dt) {
+    this.time = time;
+    this.smoke.update(time); this.fire.update(time); this.spark.update(time);
+    this.flashT = Math.max(0, this.flashT - dt * 2.5);
+    this.flash.intensity = this.flashT * this.flashT * 160;
+  }
+}
+
+// ---------------------------------------------------------------- sense of speed
+// Radial blur that grows towards the screen edges with speed, plus a chromatic split while boosting.
+export class SpeedEffect extends Effect {
+  constructor() {
+    super('SpeedEffect', /* glsl */`
+      uniform float uAmt; uniform float uAber;
+      void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) {
+        vec2 d = uv - vec2(0.5, 0.46);
+        float r = length(d);
+        float m = smoothstep(0.16, 0.72, r) * uAmt;
+        vec3 acc = inputColor.rgb; float w = 1.0;
+        if (m > 0.001) {
+          for (int i = 1; i <= 8; i++) {
+            float t = float(i) / 8.0;
+            float k = 1.0 - t * 0.6;
+            acc += texture2D(inputBuffer, uv - d * m * t * 0.32).rgb * k; w += k;
+          }
+        }
+        vec3 c = acc / w;
+        if (uAber > 0.001) {
+          vec2 o = d * uAber * r * 0.03;
+          c.r = mix(c.r, texture2D(inputBuffer, uv - o).r, 0.7);
+          c.b = mix(c.b, texture2D(inputBuffer, uv + o).b, 0.7);
+        }
+        outputColor = vec4(c, inputColor.a);
+      }`, {
+      attributes: EffectAttribute.CONVOLUTION,
+      uniforms: new Map([['uAmt', new THREE.Uniform(0)], ['uAber', new THREE.Uniform(0)]]),
+    });
+  }
+}
+
+// Wind streaks rushing past the camera at speed.
+export class SpeedLines {
+  constructor(camera, n = 90) {
+    this.n = n;
+    this.pts = [];
+    for (let i = 0; i < n; i++) this.pts.push(this.spawn(new THREE.Vector3(), true));
+    this.pos = new Float32Array(n * 6);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage));
+    this.mat = new THREE.LineBasicMaterial({ color: 0xe8e2d8, transparent: true, opacity: 0, depthWrite: false, fog: false });
+    this.lines = new THREE.LineSegments(geo, this.mat);
+    this.lines.frustumCulled = false;
+    this.lines.renderOrder = 8;
+    camera.add(this.lines);
+  }
+  spawn(p, anywhere) {
+    const a = Math.random() * Math.PI * 2, r = 2.2 + Math.random() * 6;
+    return p.set(Math.cos(a) * r * 1.4, Math.sin(a) * r * 0.8 + 0.4, -(anywhere ? 4 + Math.random() * 40 : 36 + Math.random() * 10));
+  }
+  update(dt, spd) {
+    const k = THREE.MathUtils.clamp((spd - 24) / 26, 0, 1);
+    this.mat.opacity = k * 0.32;
+    this.lines.visible = k > 0;
+    if (!k) return;
+    const len = 0.6 + spd * 0.06;
+    for (let i = 0; i < this.n; i++) {
+      const p = this.pts[i];
+      p.z += spd * 1.15 * dt;
+      if (p.z > -0.5) this.spawn(p, false);
+      this.pos.set([p.x, p.y, p.z, p.x, p.y, p.z - len], i * 6);
+    }
+    this.lines.geometry.attributes.position.needsUpdate = true;
   }
 }

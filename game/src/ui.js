@@ -228,11 +228,11 @@ export class UI {
     head.innerHTML = `<tr><th>Pos</th><th>Driver</th><th class="num">Time</th>${champ ? '<th class="num">Pts</th>' : ''}</tr>`;
     body.innerHTML = '';
     race.results.forEach((r, k) => {
-      const pts = POINTS[k] || 0;
+      const pts = r.dnf ? 0 : POINTS[k] || 0;
       if (champ) champ.points[r.name] = (champ.points[r.name] || 0) + pts;
       const tr = document.createElement('tr');
       if (r.isPlayer) tr.className = 'me';
-      tr.innerHTML = `<td>${r.pos}</td><td>#${r.number} ${r.name}</td><td class="num">${fmt(r.time)}</td>${champ ? `<td class="num">+${pts}</td>` : ''}`;
+      tr.innerHTML = `<td>${r.pos}</td><td>#${r.number} ${r.name}</td><td class="num">${r.dnf ? 'DNF' : fmt(r.time)}</td>${champ ? `<td class="num">+${pts}</td>` : ''}`;
       body.append(tr);
     });
     act.innerHTML = '';

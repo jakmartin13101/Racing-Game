@@ -85,7 +85,8 @@ export class AIDriver {
     let throttle = spd < target ? 1 : 0;
     let brake = spd > target + 1 ? THREE.MathUtils.clamp((spd - target) / 4, 0.25, 1) : 0;
     // boost on straights, and always for the lava jump run-up
-    const boost = (target > spd + 8 && v.boost > 1 - this.boostTaste && Math.abs(steer) < 0.25) || jumping ? 1 : 0;
+    // AI drivers lift off before the tank runs dry, so their engines survive
+    const boost = ((target > spd + 8 && v.boost > 1 - this.boostTaste && Math.abs(steer) < 0.25) || jumping) && v.boost > 0.07 ? 1 : 0;
 
     // rubber band: a few percent of power, towards the player
     v.power = 1 + THREE.MathUtils.clamp(leaderGap / 350, -1, 1) * this.diff.band;

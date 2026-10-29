@@ -3,7 +3,8 @@ import { EffectComposer, RenderPass, EffectPass, BloomEffect, SMAAEffect, ToneMa
   VignetteEffect, NoiseEffect, BlendFunction, HueSaturationEffect, BrightnessContrastEffect } from 'postprocessing';
 import { N8AOPostPass } from 'n8ao';
 import { loadWorld, loadMaterials, buildTerrain, buildTrackRibbon, buildLava, setAniso } from './world.js';
-import { buildSky, buildPlume, buildAsh, Dust } from './fx.js';
+import { buildSky, buildPlume, buildAsh, Dust, CrashFx, SpeedEffect, SpeedLines } from './fx.js';
+import { Debris, Breakables } from './crash.js';
 import { buildProps } from './props.js';
 import { buildVillage } from './village.js';
 import { initPhysics, loadTruckAssets, addStaticBoxes } from './vehicle.js';
@@ -76,6 +77,13 @@ const village = await buildVillage(world, scene, M, quality, tracks);
 loadStep(0.72, 'STARTING PHYSICS…');
 const phys = await initPhysics(world);
 addStaticBoxes(phys, village.colliders);
+// knock-down props, flying debris, and the smoke and fire of wrecks
+const debris = new Debris(phys);
+const breakables = new Breakables(phys, debris, [...props.handles, ...village.handles]);
+const crashFx = new CrashFx(M, scene, sun, !!quality.aiLod);
+const crash = { scene, debris, fx: crashFx, breakables };
+scene.add(camera);
+const speedLines = new SpeedLines(camera);
 loadStep(0.8, 'LOADING TRUCKS…');
 const assets = await loadTruckAssets(renderer);
 
@@ -114,6 +122,8 @@ const vignette = new VignetteEffect({ darkness: 0.45, offset: 0.3 });
 const grain = new NoiseEffect({ blendFunction: BlendFunction.OVERLAY, premultiply: false });
 grain.blendMode.opacity.value = 0.06;
 composer.addPass(new EffectPass(camera, bloom));
+const speedFx = new SpeedEffect();
+composer.addPass(new EffectPass(camera, speedFx));
 composer.addPass(new EffectPass(camera, tone, grade, contrast, vignette, grain, new SMAAEffect()));
 
 addEventListener('resize', () => {
@@ -141,7 +151,7 @@ if (S.touchUi && S.touchSteer === 'tilt') input.enableTilt();
 let race = null, raceCfg = null, state = 'menu', menuT = 0;
 const hud = {
   root: $('hud'), pos: $('pos'), poscount: $('poscount'), lap: $('lap'), laps: $('laps'), lapline: $('lapline'), track: $('trackname'),
-  time: $('time'), best: $('best'), speed: $('speed'), boost: $('boostbar'), msg: $('msg'), board: $('board'), map: $('map'), fps: $('fps'), toast: $('toast'),
+  time: $('time'), best: $('best'), speed: $('speed'), boost: $('boostbar'), dmg: $('dmgbar'), boostWrap: $('boost'), msg: $('msg'), board: $('board'), map: $('map'), fps: $('fps'), toast: $('toast'),
 };
 let mapBase = null, mapFn = null;
 
@@ -195,8 +205,11 @@ function startRace(cfg) {
   const track = trackById(cfg.track);
   race = new Race({
     phys, scene, assets, track, opponents: cfg.opponents, difficulty: cfg.difficulty, laps: cfg.laps,
-    playerPaint: cfg.paint ?? 0, quality, playerName: S.driver || 'YOU', seed: (cfg.seed ?? Date.now()) & 0xffff,
+    playerPaint: cfg.paint ?? 0, quality, playerName: S.driver || 'YOU', seed: (cfg.seed ?? Date.now()) & 0xffff, crash,
   });
+  slowT = 0; timeScale = 1; rig.cinematic(false);
+  hud.dmg.style.width = '0%';
+  hud.msg.dataset.fin = '';
   if (params.has('auto')) race.player.ai = new AIDriver(race.player.v, track, DIFFICULTY.hard, mulberry(99));
   state = 'race';
   ui.hide();
@@ -240,10 +253,12 @@ function updateHud(dt) {
   if (st.finished && hud.msg.dataset.fin !== '1') {
     hud.msg.dataset.fin = '1';
     const p = race.positionOf(st);
-    hud.msg.textContent = p === 1 ? 'WINNER!' : `P${p}`;
+    hud.msg.textContent = st.dnf ? 'DNF' : p === 1 ? 'WINNER!' : `P${p}`;
     hud.msg.classList.remove('pop'); void hud.msg.offsetWidth; hud.msg.classList.add('pop');
   }
   if (!st.finished) hud.msg.dataset.fin = '';
+  hud.dmg.style.width = `${Math.round((st.v.damage?.level || 0) * 100)}%`;
+  hud.boostWrap.classList.toggle('red', st.v.boost < 0.05);
   hud.speed.textContent = Math.round(st.v.speed() * 3.6);
   hud.boost.style.width = `${Math.round(st.v.boost * 100)}%`;
   // running order, top four plus the player
@@ -267,11 +282,31 @@ function updateHud(dt) {
   g.fillStyle = '#ffb41f'; g.strokeStyle = '#000'; g.lineWidth = 2;
   g.beginPath(); g.arc(x, y, 7, 0, 6.3); g.fill(); g.stroke();
   if (toastT > 0) { toastT -= dt; if (toastT <= 0) hud.toast.classList.remove('on'); }
+  if (msgT > 0) { msgT -= dt; if (msgT <= 0 && !st.finished) hud.msg.textContent = ''; }
 }
 
 // ---------------------------------------------------------------- main loop
 const clock = new THREE.Clock();
 let t = 0, accum = 0, lastFrame = 0, fpsAvg = 60;
+// slow motion for the player's engine blowing: slowT counts down in real seconds
+let slowT = 0, timeScale = 1;
+let msgT = 0;
+function bigMsg(txt, hold = 2.2) { hud.msg.textContent = txt; hud.msg.classList.remove('pop'); void hud.msg.offsetWidth; hud.msg.classList.add('pop'); msgT = hold; }
+function raceEvents() {
+  for (const e of race.events.splice(0)) {
+    const me = e.st ? e.st.isPlayer : true;
+    if (e.type === 'knock') rig.bump(Math.min(0.25, 0.04 + e.dv * 0.03));
+    else if (e.type === 'hit' && me) rig.bump(Math.min(0.5, e.dv * 0.025));
+    else if (e.type === 'part' && me && !e.st.v.damage.blown) toast(`${e.label} torn off`);
+    else if (e.type === 'blown') {
+      if (me) { slowT = 6; rig.cinematic(true); bigMsg('ENGINE BLOWN'); }
+      else toast(`${e.st.v.name} blew the engine`);
+    } else if (e.type === 'totaled') {
+      if (me && !e.st.v.damage.blown) bigMsg('TOTALED');
+      else if (!me && !e.st.v.damage.blown) toast(`${e.st.v.name} is wrecked`);
+    } else if (e.type === 'dnf' && me) bigMsg('DNF');
+  }
+}
 const tmp = new THREE.Vector3();
 const focus = new THREE.Vector3();
 const menuCentre = new THREE.Vector3(-150, 0, 120);
@@ -284,9 +319,11 @@ function simulate(dt) {
     while (accum >= 1 / 60 && n++ < 5) {
       if (race.player.ai) race.player.ai.update(1 / 60, race.player, race.cars.map((c) => c.v), 0);
       const pin = race.player.ai ? { ...race.player.v.input, analog: true } : raw;
+      if (params.has('blow') && race.clock > 1.5) { race.player.v.forceBlow = true; pin.boost = 1; pin.throttle = 1; if (race.player.v.boost > 0.12) race.player.v.boost = 0.12; }
       race.step(1 / 60, pin, S.steerAssist && !race.player.ai);
       accum -= 1 / 60;
     }
+    raceEvents();
     if (race.done && !race.shownResults) {
       race.shownResults = true;
       setTimeout(() => {
@@ -299,17 +336,31 @@ function simulate(dt) {
   }
 }
 
-function frame(dt) {
+function frame(real) {
+  // engine blow: about three seconds at a fifth of normal speed, easing back over the next three
+  if (slowT > 0) {
+    slowT = Math.max(0, slowT - real);
+    timeScale = slowT > 2.6 ? 0.2 : 0.2 + 0.8 * (1 - slowT / 2.6) ** 2;
+    if (slowT === 0) { timeScale = 1; rig.cinematic(false); }
+  }
+  const dt = state === 'paused' ? real : real * timeScale;
   t += dt;
   simulate(dt);
   if (race && (state === 'race' || state === 'paused' || state === 'results')) {
     race.sync(dt, t, dust, camera.position);
-    if (state !== 'paused') rig.update(dt, race.player.v, race.track, race.player.i, race.player.v.boosting);
+    if (state !== 'paused') rig.update(real, race.player.v, race.track, race.player.i, race.player.v.boosting);
+    const pv = race.player.v, spd = pv.speed();
+    const inCar = rig.cine ? 0 : 1;
+    speedFx.uniforms.get('uAmt').value = inCar * (THREE.MathUtils.clamp((spd - 18) / 34, 0, 1) * 0.3 + (pv.boosting ? 0.15 : 0));
+    speedFx.uniforms.get('uAber').value = inCar * ((pv.boosting ? 0.8 : 0) + (pv.redline ? 1.2 : 0));
+    speedLines.update(real, rig.cine ? 0 : spd);
     focus.copy(race.player.v.group.position);
-    updateHud(dt);
+    updateHud(real);
   } else {
     menuT += dt;
     rig.orbit(dt, menuT + 40, menuCentre, 1150, 260);
+    speedFx.uniforms.get('uAmt').value = 0; speedFx.uniforms.get('uAber').value = 0;
+    speedLines.update(real, 0);
     focus.set(camera.position.x * 0.5, 0, camera.position.z * 0.5);
   }
   lava.userData.uniforms.uTime.value = t;
@@ -318,6 +369,7 @@ function frame(dt) {
   ash.material.uniforms.uCam.value.copy(camera.position);
   ash.material.uniforms.uScale.value = innerHeight * renderer.getPixelRatio() * 0.6;
   dust.update(t);
+  crashFx.update(t, dt);
   props.update?.(t);
   // shadow frustum follows the focus point, texel-snapped to stop shimmering
   const texel = (sc.right - sc.left) / sunLight.shadow.mapSize.x;
@@ -330,7 +382,7 @@ function frame(dt) {
   lavaLight.position.copy(lp.pos);
   lavaLight.intensity = lp.strength * 120;
   composer.render(dt);
-  if (S.showFps) { fpsAvg += (1 / Math.max(dt, 1e-3) - fpsAvg) * 0.05; hud.fps.textContent = `${Math.round(fpsAvg)} FPS`; }
+  if (S.showFps) { fpsAvg += (1 / Math.max(real, 1e-3) - fpsAvg) * 0.05; hud.fps.textContent = `${Math.round(fpsAvg)} FPS`; }
   else hud.fps.textContent = '';
 }
 
@@ -344,8 +396,15 @@ if (params.has('race')) {
   if (params.has('cam')) rig.setMode(params.get('cam'));
   if (params.has('at')) {
     const f = race.track.frame(+params.get('at'));
-    race.place(race.player, race.track.wrap(+params.get('at')), f.x, f.z, f.yaw);
+    const yaw = f.yaw + +(params.get('yaw') || 0);
+    race.place(race.player, race.track.wrap(+params.get('at')), f.x, f.z, yaw);
     race.clock = 0;
+    // ?ram=N launches the truck straight ahead at N m/s, for crash tests
+    if (params.has('ram')) {
+      const sp = +params.get('ram');
+      race.player.v.body.setLinvel({ x: Math.sin(yaw) * sp, y: 0, z: Math.cos(yaw) * sp }, true);
+      race.player.v.ghost = false;
+    }
   }
 } else {
   ui.show(params.get('screen') || 'title');
@@ -356,8 +415,11 @@ if (still) {
   for (let i = 0; i < still - 1; i++) frameNoRender(1 / 60);
   frame(1 / 60);
   renderer.getContext().finish();
-  window.__state = race && { t: race.t, done: race.done, player: race.positionOf(race.player),
-    order: race.order.map((c) => ({ name: c.v.name, dist: Math.round(c.dist), lap: c.lap, fin: c.finished, time: c.time && +c.time.toFixed(1), resp: (c.respLog || []).join(' ') })) };
+  window.__state = race && { fxn: [crashFx.smoke.i, crashFx.fire.i, crashFx.spark.i, crashFx.time, t], t: race.t, done: race.done, player: race.positionOf(race.player),
+    order: race.order.map((c) => ({ name: c.v.name, dist: Math.round(c.dist), lap: c.lap, fin: c.finished, dnf: !!c.dnf, time: c.time && +c.time.toFixed(1), resp: (c.respLog || []).join(' '),
+      dmg: +(c.v.damage?.level || 0).toFixed(2), lost: [...(c.v.damage?.lost || [])].join(','), blown: !!c.v.damage?.blown, log: (c.v.damage?.log || []).join(' ') })),
+    knocked: breakables.items.filter((i) => i.state !== 'static').length, props: breakables.items.length, debris: debris.list.length };
+  window.__race = race; window.__fx = crashFx;
   window.__ready = true;
 } else {
   window.__ready = true;
@@ -367,6 +429,7 @@ function frameNoRender(dt) {
   t += dt;
   simulate(dt);
   if (race) { race.sync(dt, t, null, camera.position); rig.update(dt, race.player.v, race.track, race.player.i, false); }
+  crashFx.update(t, dt);
 }
 
 // frame cap: browser and phone builds default to 30 fps, the desktop app runs uncapped

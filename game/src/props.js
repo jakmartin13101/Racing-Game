@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { mulberry, nearTrack } from './world.js';
+import { BREAKABLE } from './crash.js';
 
 const BASE = import.meta.env.BASE_URL;
 const ENV = `${BASE}models/env`;
@@ -21,9 +22,10 @@ async function loadModel(loader, name) {
 }
 
 // Collects transforms per model and turns them into InstancedMeshes.
+// Props that can be knocked flying keep their batch meshes so the crash code can move single instances.
 class Scatter {
-  constructor(model) { this.model = model; this.list = []; }
-  add(m) { this.list.push(m.clone()); }
+  constructor(model, movable) { this.model = model; this.list = []; this.meshes = []; this.movable = movable; }
+  add(m) { this.list.push(m.clone()); return this.list.length - 1; }
   build(group, shadows = true) {
     if (!this.list.length) return;
     for (const { geo, mat } of this.model.meshes) {
@@ -31,7 +33,9 @@ class Scatter {
       this.list.forEach((m, i) => im.setMatrixAt(i, m));
       im.castShadow = shadows; im.receiveShadow = true;
       im.computeBoundingSphere();
+      if (this.movable) { im.frustumCulled = false; im.instanceMatrix.setUsage(THREE.DynamicDrawUsage); }
       group.add(im);
+      this.meshes.push(im);
     }
   }
 }
@@ -47,9 +51,11 @@ export async function loadPropModels(names) {
   return models;
 }
 
-// A placement helper shared by the trackside and village dressing: put(name, x, z, yaw, size, opts)
+// A placement helper shared by the trackside and village dressing: put(name, x, z, yaw, size, opts).
+// Every placement of a BREAKABLE model is recorded in `handles` for the crash code.
 export function makePlacer(world, models, rnd) {
   const S = {};
+  const handles = [];
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), p = new THREE.Vector3();
   const up = new THREE.Vector3(0, 1, 0), N = new THREE.Vector3();
   // size = target largest dimension (m); align = tilt to terrain normal
@@ -67,22 +73,54 @@ export function makePlacer(world, models, rnd) {
     sc.set(s, s * scaleY, s);
     p.set(x, gy - mdl.box.min.y * s - sink * size + yOff, z);
     m4.compose(p, q, sc);
-    (S[name] ||= new Scatter(mdl)).add(m4);
+    const scatter = (S[name] ||= new Scatter(mdl, !!BREAKABLE[name]));
+    const idx = scatter.add(m4);
+    if (BREAKABLE[name]) handles.push({ name, model: mdl, idx, meshes: scatter.meshes, matrix: m4.clone(), scale: sc.clone() });
   };
   const build = (group, shadows = true) => { for (const sc of Object.values(S)) sc.build(group, shadows); };
-  return { put, build };
+  return { put, build, handles };
 }
 
 const NAMES = ['boulder_01', 'rock_09', 'namaqualand_boulder_02', 'namaqualand_cliff_02', 'Barrel_01', 'barrel_03',
   'old_tyre', 'wooden_crate_02', 'concrete_road_barrier', 'metal_jerrycan', 'propane_tank', 'rusted_wheel_rim_02'];
 
 // Trackside dressing for every track, plus rocks strewn across the volcano.
+// Yellow-and-black corner chevron on a steel post; one model per arrow direction.
+function chevronModels() {
+  const cv = document.createElement('canvas');
+  cv.width = 512; cv.height = 256;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#ffb41f'; g.fillRect(0, 0, 512, 256);
+  g.fillStyle = '#15110e';
+  for (let k = 0; k < 3; k++) {
+    const x = 70 + k * 140;
+    g.beginPath(); g.moveTo(x, 20); g.lineTo(x + 90, 128); g.lineTo(x, 236); g.lineTo(x + 50, 236); g.lineTo(x + 140, 128); g.lineTo(x + 50, 20); g.closePath(); g.fill();
+  }
+  for (let i = 0; i < 900; i++) { g.fillStyle = `rgba(70,55,40,${Math.random() * 0.25})`; g.fillRect(Math.random() * 512, Math.random() * 256, 2 + Math.random() * 14, 2 + Math.random() * 6); }
+  const steel = new THREE.MeshStandardMaterial({ color: 0x5a5753, roughness: 0.5, metalness: 0.8 });
+  const back = new THREE.MeshStandardMaterial({ color: 0x24211e, roughness: 0.7, metalness: 0.4 });
+  const make = (flip) => {
+    const t = new THREE.CanvasTexture(cv);
+    t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+    if (flip) { t.wrapS = THREE.RepeatWrapping; t.repeat.x = -1; }
+    const face = new THREE.MeshStandardMaterial({ map: t, roughness: 0.55, metalness: 0.05 });
+    const post = new THREE.BoxGeometry(0.08, 1.6, 0.08).translate(0, 0.8, -0.04);
+    const board = new THREE.BoxGeometry(1.12, 0.58, 0.03).translate(0, 1.25, 0);
+    const plate = new THREE.PlaneGeometry(1.08, 0.54).translate(0, 1.25, 0.017);
+    const meshes = [{ geo: post, mat: steel }, { geo: board, mat: back }, { geo: plate, mat: face }];
+    const box = new THREE.Box3();
+    for (const m of meshes) { m.geo.computeBoundingBox(); box.union(m.geo.boundingBox); }
+    return { meshes, box, size: box.getSize(new THREE.Vector3()) };
+  };
+  return { chevron_sign: make(false), chevron_sign_l: make(true) };
+}
+
 export async function buildProps(world, scene, M, quality, tracks) {
-  const models = await loadPropModels(NAMES);
+  const models = { ...await loadPropModels(NAMES), ...chevronModels() };
   const group = new THREE.Group();
   scene.add(group);
   const rnd = mulberry(1234);
-  const { put, build } = makePlacer(world, models, rnd);
+  const { put, build, handles } = makePlacer(world, models, rnd);
   const rocks = ['boulder_01', 'rock_09', 'namaqualand_boulder_02'];
   const village = world.data.tracks.find((t) => t.villageCentre)?.villageCentre;
   const inVillage = (x, z, r = 300) => village && Math.hypot(x - village[0], z - village[1]) < r;
@@ -146,6 +184,12 @@ export async function buildProps(world, scene, M, quality, tracks) {
         put('old_tyre', x, z, rnd() * 6, 0.85, { align: 1 });
         put('old_tyre', x, z, rnd() * 6, 0.85, { align: 1, yOff: 0.27 });
       }
+      // a chevron behind the tyres every 18 m through the bend, facing the oncoming trucks
+      if (i % 18 === 0 && Math.abs(turn) > 0.32) {
+        const lat = side * (W / 2 + 3.6);
+        const x = f.x + f.nx * lat, z = f.z + f.nz * lat;
+        if (!nearTrack(world, x, z, W / 2 + 2.4)) put(turn > 0 ? 'chevron_sign_l' : 'chevron_sign', x, z, f.yaw + Math.PI, 1.6, { byHeight: true, sink: 0.03 });
+      }
     }
     // wreckage and scrap rims scattered around
     for (let k = 0; k < 30; k++) {
@@ -166,7 +210,7 @@ export async function buildProps(world, scene, M, quality, tracks) {
     put(rocks[Math.floor(rnd() * rocks.length)], x, z, rnd() * 6.28, 1.2 + Math.pow(rnd(), 4) * 16, { align: 0.7, sink: 0.15, tilt: 0.5 });
   }
   build(group);
-  return { group, models, update() {} };
+  return { group, models, handles, update() {} };
 }
 
 function bannerTexture(text, w = 2048, h = 256) {

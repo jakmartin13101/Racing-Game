@@ -10,6 +10,14 @@ export class Track {
     // the start/finish line sits under the gantry, the grid forms up behind it
     this.line = data.start + 20;
     this.finishRel = this.closed ? this.n : this.n - 40 - this.line;
+    // jumps the AI must take flat out; track events (the lava breakout ramp) add their own while active.
+    // land: where a truck that fell short is put back down
+    this.jumps = [];
+    if (data.jump != null) {
+      let land = data.jump;
+      while (this.at(land)[4]) land = this.wrap(land + 1);
+      this.jumps.push({ at: data.jump, speed: 38, flat: 60, land: this.wrap(land + 20) });
+    }
     // heading change per metre, smoothed, for AI braking and corner props
     const head = [];
     for (let i = 0; i < this.n; i++) {

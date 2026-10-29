@@ -228,10 +228,39 @@ export class Dust {
 }
 
 // ---------------------------------------------------------------- crash smoke, fire and sparks
-// Instanced billboards with per-particle birth, velocity, size and life. kind 'smoke' is alpha-blended and lit,
-// 'fire' is additive and runs white -> orange -> dark red over its life; 'spark' is a small hot fire streak.
+// Procedural flame tongue: hot narrow core, ragged edges, brighter at the base.
+function flameTexture() {
+  const W = 128, H = 256;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  const img = g.createImageData(W, H);
+  const rnd = mulberry(91);
+  const noise = Array.from({ length: 64 }, () => rnd());
+  const n1 = (x) => { const i = Math.floor(x) & 63, f = x - Math.floor(x); return noise[i] * (1 - f) + noise[(i + 1) & 63] * f; };
+  for (let y = 0; y < H; y++) {
+    const v = y / H; // 0 top .. 1 base
+    const width = 0.12 + 0.32 * Math.sin(Math.min(1, v * 1.15) * Math.PI * 0.62) ** 1.2;
+    for (let x = 0; x < W; x++) {
+      const u = (x / W - 0.5) + (n1(v * 9 + 3) - 0.5) * 0.14 * (1 - v);
+      const edge = Math.abs(u) / width;
+      let a = Math.max(0, 1 - edge * edge) * Math.min(1, v * 3.5) * (0.75 + 0.5 * n1(x * 0.21 + v * 17));
+      a *= Math.min(1, (1 - v) * 6 + 0.25);
+      const k = (y * W + x) * 4;
+      img.data[k] = img.data[k + 1] = img.data[k + 2] = 255;
+      img.data[k + 3] = Math.max(0, Math.min(255, a * 255));
+    }
+  }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(cv);
+  return t;
+}
+
+// Instanced billboards with per-particle birth, velocity, size and life.
+// kinds: 'smoke' alpha-blended and lit; 'fire' additive puffs white -> orange -> dark red;
+// 'flame' additive tongues stretched upwards; 'spark' small hot streaks stretched along their motion.
 export class Puffs {
-  constructor(M, max, kind) {
+  constructor(M, max, kind, tex = M.smoke) {
     this.max = max; this.i = 0; this.kind = kind;
     const base = new THREE.PlaneGeometry(1, 1);
     const geo = new THREE.InstancedBufferGeometry();
@@ -243,26 +272,40 @@ export class Puffs {
     this.attrs = [mk(this.p, 'pb'), mk(this.v, 'vs'), mk(this.c, 'cl')];
     geo.instanceCount = max;
     for (let i = 0; i < max; i++) this.p[i * 4 + 3] = -999;
-    const fire = kind !== 'smoke';
+    const hot = kind !== 'smoke';
+    const drag = kind === 'spark' ? '0.5' : kind === 'flame' ? '0.2' : kind === 'fire' ? '0.9' : '1.8';
+    const grav = kind === 'spark' ? '-9.0' : '0.0';
     this.mat = new THREE.ShaderMaterial({
-      transparent: true, depthWrite: false, blending: fire ? THREE.AdditiveBlending : THREE.NormalBlending,
-      uniforms: { uTime: { value: 0 }, tSmoke: { value: M.smoke }, uSun: { value: new THREE.Vector3(0, 1, 0) },
-        uRise: { value: fire ? 2.2 : 1.4 }, uGrow: { value: kind === 'spark' ? 0.0 : fire ? 1.4 : 2.6 } },
+      transparent: true, depthWrite: false, blending: hot ? THREE.AdditiveBlending : THREE.NormalBlending,
+      uniforms: { uTime: { value: 0 }, tTex: { value: tex }, uSun: { value: new THREE.Vector3(0, 1, 0) },
+        uRise: { value: kind === 'fire' ? 2.4 : kind === 'flame' ? 0.6 : kind === 'spark' ? 0 : 1.4 },
+        uGrow: { value: kind === 'spark' ? 0.0 : kind === 'flame' ? 0.3 : kind === 'fire' ? 1.6 : 2.6 } },
       vertexShader: /* glsl */`
         attribute vec4 pb; attribute vec4 vs; attribute vec4 cl; uniform float uTime, uRise, uGrow;
-        varying vec2 vUv; varying float vAge; varying vec3 vCol; varying vec3 vR, vU, vF;
+        varying vec2 vUv; varying float vAge; varying vec3 vCol; varying vec3 vR, vU, vF; varying float vSeed;
         void main() {
           float t = uTime - pb.w;
           float life = cl.w;
           vAge = t < 0.0 || t > life ? 2.0 : t / life;
-          // fire keeps most of its launch speed so flames ride along with a moving wreck
-          float drag = ${kind === 'spark' ? '0.4' : fire ? '0.3' : '1.8'};
-          vec3 p = pb.xyz + vs.xyz * (1.0 - exp(-t * drag)) / drag + vec3(0.0, t * t * ${kind === 'spark' ? '-4.0' : '0.0'} + t * uRise, 0.0);
+          float drag = ${drag};
+          vec3 p = pb.xyz + vs.xyz * (1.0 - exp(-t * drag)) / drag + vec3(0.0, 0.5 * ${grav} * t * t + t * uRise, 0.0);
           float size = vs.w * (1.0 + t * uGrow);
           vec4 mv = viewMatrix * vec4(p, 1.0);
-          float rot = fract(pb.w * 7.31) * 6.283 + t * 0.4;
+          vSeed = fract(pb.w * 7.31 + pb.x * 0.37);
+          ${kind === 'spark' ? `
+          // streak along the screen-space direction of travel
+          vec3 vel = vs.xyz * exp(-t * drag) + vec3(0.0, ${grav} * t, 0.0);
+          vec2 d = (viewMatrix * vec4(vel, 0.0)).xy;
+          float L = length(d);
+          vec2 dir = L > 1e-3 ? d / L : vec2(0.0, 1.0);
+          vec2 perp = vec2(-dir.y, dir.x);
+          mv.xy += perp * position.x * size + dir * position.y * (size + L * 0.035);` : kind === 'flame' ? `
+          // tongues stand upright, base at the emitter, flickering in width
+          float fl = 0.85 + 0.3 * sin(uTime * 23.0 + vSeed * 40.0);
+          mv.xy += vec2(position.x * size * fl, (position.y + 0.45) * size * 1.9);` : `
+          float rot = vSeed * 6.283 + t * 0.4;
           vec2 c = vec2(cos(rot), sin(rot));
-          mv.xy += vec2(position.x * c.x - position.y * c.y, position.x * c.y + position.y * c.x) * size;
+          mv.xy += vec2(position.x * c.x - position.y * c.y, position.x * c.y + position.y * c.x) * size;`}
           vUv = uv; vCol = cl.rgb;
           vR = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
           vU = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
@@ -270,23 +313,33 @@ export class Puffs {
           gl_Position = vAge > 1.0 ? vec4(0.0, 0.0, -2.0, 1.0) : projectionMatrix * mv;
         }`,
       fragmentShader: /* glsl */`
-        uniform sampler2D tSmoke; uniform vec3 uSun; varying vec2 vUv; varying float vAge; varying vec3 vCol; varying vec3 vR, vU, vF;
+        uniform sampler2D tTex; uniform vec3 uSun; uniform float uTime;
+        varying vec2 vUv; varying float vAge; varying vec3 vCol; varying vec3 vR, vU, vF; varying float vSeed;
         void main() {
-          vec4 s = texture2D(tSmoke, vUv);
-          ${fire ? `
-          vec3 hot = mix(vec3(3.0, 1.9, 0.8), vec3(2.2, 0.62, 0.1), smoothstep(0.0, 0.3, vAge));
-          hot = mix(hot, vec3(0.35, 0.05, 0.015), smoothstep(0.3, 1.0, vAge));
-          float a = s.a * (1.0 - smoothstep(0.5, 1.0, vAge)) * smoothstep(0.0, 0.05, vAge + 0.02) * 0.55;
+          ${kind === 'spark' ? `
+          float a = (1.0 - smoothstep(0.0, 0.5, abs(vUv.x - 0.5))) * (1.0 - smoothstep(0.6, 1.0, vAge));
+          gl_FragColor = vec4(vec3(4.0, 2.2, 0.8) * vCol * a, a);` : kind === 'flame' ? `
+          vec2 uv = vUv + vec2(sin(vUv.y * 9.0 + uTime * 14.0 + vSeed * 20.0) * 0.05 * vUv.y, 0.0);
+          float a = texture2D(tTex, uv).a * (1.0 - smoothstep(0.55, 1.0, vAge)) * smoothstep(0.0, 0.08, vAge);
+          // white-yellow at the root, orange body, deep red tips
+          vec3 c = mix(vec3(2.0, 1.25, 0.5), vec3(1.7, 0.48, 0.07), smoothstep(0.08, 0.45, vUv.y));
+          c = mix(c, vec3(0.5, 0.06, 0.01), smoothstep(0.5, 1.0, vUv.y) + vAge * 0.5);
+          gl_FragColor = vec4(c * vCol * a * 0.5, a);` : kind === 'fire' ? `
+          vec4 s = texture2D(tTex, vUv);
+          vec3 hot = mix(vec3(3.4, 2.4, 1.2), vec3(2.4, 0.68, 0.1), smoothstep(0.0, 0.25, vAge));
+          hot = mix(hot, vec3(0.3, 0.04, 0.01), smoothstep(0.25, 0.9, vAge));
+          float a = s.a * (1.0 - smoothstep(0.45, 1.0, vAge)) * smoothstep(0.0, 0.04, vAge + 0.02) * 0.6;
           gl_FragColor = vec4(hot * vCol * a, a);` : `
+          vec4 s = texture2D(tTex, vUv);
           vec3 n = normalize((s.r * 2.0 - 1.0) * vR + (s.g * 2.0 - 1.0) * vU + (s.b * 2.0 - 1.0) * vF);
           float lit = clamp(dot(n, uSun) * 0.5 + 0.55, 0.0, 1.0);
-          float a = s.a * smoothstep(0.0, 0.06, vAge) * (1.0 - smoothstep(0.4, 1.0, vAge)) * 0.8;
+          float a = s.a * smoothstep(0.0, 0.06, vAge) * (1.0 - smoothstep(0.4, 1.0, vAge)) * 0.85;
           gl_FragColor = vec4(vCol * mix(0.4, 1.3, lit), a);`}
         }`,
     });
     this.mesh = new THREE.Mesh(geo, this.mat);
     this.mesh.frustumCulled = false;
-    this.mesh.renderOrder = fire ? 6 : 5;
+    this.mesh.renderOrder = hot ? 6 : 5;
   }
   emit(pos, vel, size, time, life = 2, r = 1, g = 1, b = 1) {
     const i = this.i++ % this.max, k = i * 4;
@@ -301,35 +354,72 @@ export class Puffs {
   }
 }
 
-// Shared crash effects: smoke, fire, sparks and a flash light for explosions.
+// Shared crash effects: smoke, fire, flames, sparks, an explosion flash light and a flickering fire light.
 export class CrashFx {
   constructor(M, scene, sun, lite = false) {
-    this.smoke = new Puffs(M, lite ? 260 : 600, 'smoke');
-    this.fire = new Puffs(M, lite ? 160 : 360, 'fire');
-    this.spark = new Puffs(M, lite ? 120 : 260, 'spark');
+    this.lite = lite;
+    this.smoke = new Puffs(M, lite ? 320 : 800, 'smoke');
+    this.fire = new Puffs(M, lite ? 200 : 480, 'fire');
+    this.flame = new Puffs(M, lite ? 160 : 360, 'flame', flameTexture());
+    this.spark = new Puffs(M, lite ? 160 : 400, 'spark');
     this.smoke.mat.uniforms.uSun.value.copy(sun);
-    scene.add(this.smoke.mesh, this.fire.mesh, this.spark.mesh);
-    this.flash = new THREE.PointLight(0xff7a2a, 0, 30, 2);
-    scene.add(this.flash);
+    scene.add(this.smoke.mesh, this.fire.mesh, this.flame.mesh, this.spark.mesh);
+    this.flash = new THREE.PointLight(0xff7a2a, 0, 34, 2);
+    this.fireLight = new THREE.PointLight(0xff6a1a, 0, 16, 2);
+    scene.add(this.flash, this.fireLight);
     this.flashT = 0;
     this.time = 0;
+    this.fireK = 0;
   }
   // carry: velocity of the thing that exploded, so the fireball travels with it
   burst(pos, time, power = 1, carry = null) {
     const v = new THREE.Vector3();
     const c = carry || new THREE.Vector3();
-    for (let k = 0; k < 30 * power; k++) {
+    for (let k = 0; k < 24 * power; k++) {
       v.set(Math.random() - 0.5, Math.random() * 0.9 + 0.2, Math.random() - 0.5).normalize().multiplyScalar(2 + Math.random() * 5 * power).addScaledVector(c, 0.9);
-      this.fire.emit(pos, v, 0.6 + Math.random() * 1.3 * power, time, 0.6 + Math.random() * 0.7);
+      this.fire.emit(pos, v, 0.6 + Math.random() * 1.2 * power, time, 0.6 + Math.random() * 0.7);
     }
-    for (let k = 0; k < 40 * power; k++) {
+    for (let k = 0; k < 36 * power; k++) {
       v.set(Math.random() - 0.5, Math.random() * 1.2, Math.random() - 0.5).normalize().multiplyScalar(6 + Math.random() * 14).addScaledVector(c, 0.8);
-      this.spark.emit(pos, v, 0.06 + Math.random() * 0.06, time, 0.5 + Math.random() * 0.9);
+      this.spark.emit(pos, v, 0.05 + Math.random() * 0.05, time, 0.5 + Math.random() * 0.9);
     }
-    for (let k = 0; k < 18 * power; k++) {
+    for (let k = 0; k < 16 * power; k++) {
       v.set(Math.random() - 0.5, Math.random() * 0.6 + 0.3, Math.random() - 0.5).normalize().multiplyScalar(1 + Math.random() * 3).addScaledVector(c, 0.6);
       const g = 0.05 + Math.random() * 0.05;
       this.smoke.emit(pos, v, 1.2 + Math.random() * 1.6, time + Math.random() * 0.3, 3.5 + Math.random() * 3, g, g, g);
+    }
+    this.flash.position.copy(pos);
+    this.flashT = Math.max(this.flashT, power * 0.8);
+  }
+  // a full engine explosion: white core flash, rolling fireball, flame tongues, shrapnel sparks,
+  // a ground-hugging dust ring and a thick black column
+  explode(pos, time, power = 1.5, carry = null) {
+    const v = new THREE.Vector3();
+    const c = carry || new THREE.Vector3();
+    const n = this.lite ? 0.6 : 1;
+    for (let k = 0; k < 4; k++) this.fire.emit(pos, v.copy(c).multiplyScalar(0.95), 2.2 * power, time, 0.22, 1.4, 1.3, 1.2);
+    for (let k = 0; k < 44 * power * n; k++) {
+      v.set(Math.random() - 0.5, Math.random() * 0.8 + 0.35, Math.random() - 0.5).normalize().multiplyScalar(2.5 + Math.random() * 6 * power).addScaledVector(c, 0.9);
+      this.fire.emit(pos, v, 0.8 + Math.random() * 1.6 * power, time + Math.random() * 0.12, 0.7 + Math.random() * 0.9);
+    }
+    for (let k = 0; k < 24 * n; k++) {
+      v.set((Math.random() - 0.5) * 3, 2 + Math.random() * 4, (Math.random() - 0.5) * 3).addScaledVector(c, 0.95);
+      this.flame.emit(pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 1.2, 0, (Math.random() - 0.5) * 1.2)), v, 0.7 + Math.random() * 1.1, time + Math.random() * 0.3, 0.6 + Math.random() * 0.6);
+    }
+    for (let k = 0; k < 90 * n; k++) {
+      v.set(Math.random() - 0.5, Math.random() * 1.3, Math.random() - 0.5).normalize().multiplyScalar(8 + Math.random() * 20).addScaledVector(c, 0.8);
+      this.spark.emit(pos, v, 0.035 + Math.random() * 0.05, time, 0.6 + Math.random() * 1.2);
+    }
+    for (let k = 0; k < 26 * n; k++) {
+      const a = (k / 26) * Math.PI * 2;
+      v.set(Math.cos(a) * 9, 0.4, Math.sin(a) * 9).addScaledVector(c, 0.5);
+      const g = 0.26 + Math.random() * 0.06;
+      this.smoke.emit(pos.clone().add(new THREE.Vector3(0, -0.8, 0)), v, 0.9 + Math.random() * 0.6, time, 2.2 + Math.random(), g, g * 0.92, g * 0.85);
+    }
+    for (let k = 0; k < 36 * n; k++) {
+      v.set((Math.random() - 0.5) * 2.5, 2 + Math.random() * 3, (Math.random() - 0.5) * 2.5).addScaledVector(c, 0.55);
+      const g = 0.03 + Math.random() * 0.04;
+      this.smoke.emit(pos, v, 1.3 + Math.random() * 2, time + 0.1 + Math.random() * 0.6, 5 + Math.random() * 4, g, g, g);
     }
     this.flash.position.copy(pos);
     this.flashT = Math.max(this.flashT, power);
@@ -338,80 +428,84 @@ export class CrashFx {
     const v = new THREE.Vector3();
     for (let k = 0; k < n; k++) {
       v.copy(dir).multiplyScalar(4 + Math.random() * 6).add(new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.8, Math.random() - 0.5).multiplyScalar(6));
-      this.spark.emit(pos, v, 0.04 + Math.random() * 0.05, time, 0.3 + Math.random() * 0.5);
+      this.spark.emit(pos, v, 0.03 + Math.random() * 0.04, time, 0.3 + Math.random() * 0.5);
     }
+  }
+  // a burning wreck lights its surroundings; the brightest caller this frame wins
+  light(pos, k) {
+    if (k < this.fireK) return;
+    this.fireK = k;
+    this.fireLight.position.copy(pos).add(new THREE.Vector3(0, 0.8, 0));
   }
   update(time, dt) {
     this.time = time;
-    this.smoke.update(time); this.fire.update(time); this.spark.update(time);
+    this.smoke.update(time); this.fire.update(time); this.flame.update(time); this.spark.update(time);
     this.flashT = Math.max(0, this.flashT - dt * 2.5);
-    this.flash.intensity = this.flashT * this.flashT * 160;
+    this.flash.intensity = this.flashT * this.flashT * 180;
+    this.fireLight.intensity = this.fireK * (26 + Math.sin(time * 31) * 6 + Math.sin(time * 17.3) * 5 + Math.random() * 6);
+    this.fireK = 0;
   }
 }
 
 // ---------------------------------------------------------------- sense of speed
-// Radial blur that grows towards the screen edges with speed, plus a chromatic split while boosting.
-export class SpeedEffect extends Effect {
-  constructor() {
-    super('SpeedEffect', /* glsl */`
-      uniform float uAmt; uniform float uAber;
-      void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) {
+// Camera motion blur: each pixel's world position (from depth) is reprojected with last frame's camera, and the
+// image is smeared along the difference. The truck moves with the camera, so it stays sharp while the ground
+// streams past. Adds a little radial zoom blur while boosting and a chromatic split in the boost redline.
+export class MotionBlurEffect extends Effect {
+  constructor(samples = 10) {
+    super('MotionBlurEffect', /* glsl */`
+      uniform mat4 uInvProj, uCamWorld, uPrevVP;
+      uniform float uAmount, uRadial, uAber;
+      void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth, out vec4 outputColor) {
+        vec4 ndc = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+        vec4 view = uInvProj * ndc; view /= view.w;
+        vec4 world = uCamWorld * view;
+        vec4 prev = uPrevVP * world;
+        vec2 prevUv = prev.xy / prev.w * 0.5 + 0.5;
+        vec2 vel = (uv - prevUv) * uAmount;
         vec2 d = uv - vec2(0.5, 0.46);
-        float r = length(d);
-        float m = smoothstep(0.16, 0.72, r) * uAmt;
+        vel += d * uRadial * smoothstep(0.1, 0.6, length(d));
+        float L = length(vel);
+        if (L > 0.07) vel *= 0.07 / L;
         vec3 acc = inputColor.rgb; float w = 1.0;
-        if (m > 0.001) {
-          for (int i = 1; i <= 8; i++) {
-            float t = float(i) / 8.0;
-            float k = 1.0 - t * 0.6;
-            acc += texture2D(inputBuffer, uv - d * m * t * 0.32).rgb * k; w += k;
+        if (L > 0.0008) {
+          for (int i = 1; i < SAMPLES; i++) {
+            float t = float(i) / float(SAMPLES - 1) - 0.5;
+            acc += texture2D(inputBuffer, uv - vel * t).rgb; w += 1.0;
           }
         }
         vec3 c = acc / w;
         if (uAber > 0.001) {
-          vec2 o = d * uAber * r * 0.03;
+          vec2 o = d * uAber * length(d) * 0.035;
           c.r = mix(c.r, texture2D(inputBuffer, uv - o).r, 0.7);
           c.b = mix(c.b, texture2D(inputBuffer, uv + o).b, 0.7);
         }
         outputColor = vec4(c, inputColor.a);
       }`, {
-      attributes: EffectAttribute.CONVOLUTION,
-      uniforms: new Map([['uAmt', new THREE.Uniform(0)], ['uAber', new THREE.Uniform(0)]]),
+      attributes: EffectAttribute.CONVOLUTION | EffectAttribute.DEPTH,
+      defines: new Map([['SAMPLES', String(samples)]]),
+      uniforms: new Map([
+        ['uInvProj', new THREE.Uniform(new THREE.Matrix4())], ['uCamWorld', new THREE.Uniform(new THREE.Matrix4())],
+        ['uPrevVP', new THREE.Uniform(new THREE.Matrix4())], ['uAmount', new THREE.Uniform(0)],
+        ['uRadial', new THREE.Uniform(0)], ['uAber', new THREE.Uniform(0)],
+      ]),
     });
+    this.prevVP = new THREE.Matrix4();
+    this.prevPos = new THREE.Vector3();
+    this.first = true;
   }
-}
-
-// Wind streaks rushing past the camera at speed.
-export class SpeedLines {
-  constructor(camera, n = 90) {
-    this.n = n;
-    this.pts = [];
-    for (let i = 0; i < n; i++) this.pts.push(this.spawn(new THREE.Vector3(), true));
-    this.pos = new Float32Array(n * 6);
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage));
-    this.mat = new THREE.LineBasicMaterial({ color: 0xe8e2d8, transparent: true, opacity: 0, depthWrite: false, fog: false });
-    this.lines = new THREE.LineSegments(geo, this.mat);
-    this.lines.frustumCulled = false;
-    this.lines.renderOrder = 8;
-    camera.add(this.lines);
-  }
-  spawn(p, anywhere) {
-    const a = Math.random() * Math.PI * 2, r = 2.2 + Math.random() * 6;
-    return p.set(Math.cos(a) * r * 1.4, Math.sin(a) * r * 0.8 + 0.4, -(anywhere ? 4 + Math.random() * 40 : 36 + Math.random() * 10));
-  }
-  update(dt, spd) {
-    const k = THREE.MathUtils.clamp((spd - 24) / 26, 0, 1);
-    this.mat.opacity = k * 0.32;
-    this.lines.visible = k > 0;
-    if (!k) return;
-    const len = 0.6 + spd * 0.06;
-    for (let i = 0; i < this.n; i++) {
-      const p = this.pts[i];
-      p.z += spd * 1.15 * dt;
-      if (p.z > -0.5) this.spawn(p, false);
-      this.pos.set([p.x, p.y, p.z, p.x, p.y, p.z - len], i * 6);
-    }
-    this.lines.geometry.attributes.position.needsUpdate = true;
+  // call once per frame before rendering, after the camera has moved
+  track(camera, amount) {
+    camera.updateMatrixWorld();
+    const u = this.uniforms;
+    u.get('uInvProj').value.copy(camera.projectionMatrixInverse);
+    u.get('uCamWorld').value.copy(camera.matrixWorld);
+    u.get('uPrevVP').value.copy(this.prevVP);
+    // camera cuts would smear the whole screen
+    const jump = camera.position.distanceTo(this.prevPos) > 25;
+    u.get('uAmount').value = this.first || jump ? 0 : amount;
+    this.prevVP.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    this.prevPos.copy(camera.position);
+    this.first = false;
   }
 }

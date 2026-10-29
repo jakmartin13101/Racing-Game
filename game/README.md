@@ -24,9 +24,13 @@ npm run dist:win   # Windows installer -> release/GravelRiot-Setup.exe (needs ma
 
 Tracks share one volcano map:
 
-- **Caldera Loop** (main track, 2.9 km): the original loop with the lava-river jump.
-- **Ashfall Village** (1.9 km): a circuit through the streets of the village below the volcano.
+- **Caldera Loop** (main track, 2.9 km): the original loop with the lava-river jump. Once the leader starts
+  lap two, the ground in the canyon heaves up into a ramp and lava floods across the road just past it: jump
+  it or lose the truck to the lava.
+- **Ashfall Village** (1.9 km): a circuit through the streets of the village below the volcano, under a
+  steady rain of glowing volcanic bombs, small and large. A red ring marks where each one will land.
 - **Summit Sprint** (3.2 km, point to point): switchbacks from the foothills up to the summit lookout.
+  Boulders roll off the slopes, and bombs fall on the upper half.
 
 The browser and phones cap at 30 fps and default to lighter graphics; the desktop app runs uncapped at high.
 
@@ -44,10 +48,13 @@ Cameras: chase, far chase, hood, bumper and trackside TV.
 - **Knock-down props**: barrels, tyres, crates, gas bottles, jerry cans, benches, tables, corner chevrons,
   concrete barriers and street lamps fly or topple when hit, and take speed off the truck in proportion to their
   weight. Barriers and lamps stand firm below about 45 and 18 km/h. Buildings and trees are solid.
-- **Truck damage**: hard hits dent the body and scrape the paint, and parts break off by side (mirrors,
-  bumpers, light bar, spare tyres, doors, bonnet). Damage costs power and top speed; at 100% the truck is
+- **Truck damage** (all trucks): soft-body dents push the panels in where they are hit, more detailed on
+  higher graphics settings. Panels work loose before they go: the bonnet pops and buckles up, doors and
+  bumpers hang and flap at speed, then break off (mirrors, bumpers, light bar, spare tyres, doors, bonnet).
+  A hard hit on a wheel bends it (the truck pulls to that side), and a harder one tears it off.
+  Volcanic bombs and boulders do damage too. Damage costs power and top speed; at 100% the truck is
   totaled, coasts to a stop and is out (DNF), unless it rolls over the finish line first.
-- **Boost**: the camera shakes in the last 5% of the tank. Running it dry at full boost blows the engine one
+- **Boost**: the camera shakes hard in the last 10% of the tank. Running it dry at full boost blows the engine one
   time in five: slow motion, bonnet and pistons out, fire and smoke, and the truck is totaled.
 
 `tools/truck/split.py` cuts the breakable parts out of the baked truck models.
@@ -60,7 +67,9 @@ used for headless captures).
 
 `src/main.js` (app state and loop), `world.js` (terrain, materials, lava), `track.js` (track geometry
 queries), `vehicle.js` (truck physics and visuals), `ai.js` (opponent drivers), `race.js` (grid, laps,
-respawns, results), `camera.js`, `input.js` (keyboard, gamepad, touch, tilt), `ui.js` / `ui.css` (menus,
+respawns, results), `camera.js` (the TV camera checks its line of sight and moves when terrain or a building gets in the way),
+`hazards.js` (bombs, boulders, the Caldera lava breakout), `damage.js`, `crash.js`, `fx.js` (smoke, fire,
+motion blur), `input.js` (keyboard, gamepad, touch, tilt), `ui.js` / `ui.css` (menus,
 HUD), `settings.js` (presets and saved settings), `props.js` and `village.js` (scenery). The desktop
 wrapper is `electron/main.cjs`, and `electron/installer.nsi` builds the installer.
 

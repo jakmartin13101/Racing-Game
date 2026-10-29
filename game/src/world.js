@@ -450,6 +450,7 @@ lavaN = normalize(mix(lavaN, vec3(0,0,1), molten * 0.7));
   crater.position.set(0, world.heightAt(0, 0) + 6, 0);
   group.add(crater);
   group.userData.uniforms = lavaUniforms;
+  group.userData.makeMat = makeMat;
   return group;
 }
 

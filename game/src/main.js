@@ -3,7 +3,8 @@ import { EffectComposer, RenderPass, EffectPass, BloomEffect, SMAAEffect, ToneMa
   VignetteEffect, NoiseEffect, BlendFunction, HueSaturationEffect, BrightnessContrastEffect } from 'postprocessing';
 import { N8AOPostPass } from 'n8ao';
 import { loadWorld, loadMaterials, buildTerrain, buildTrackRibbon, buildLava, setAniso } from './world.js';
-import { buildSky, buildPlume, buildAsh, Dust, CrashFx, SpeedEffect, SpeedLines } from './fx.js';
+import { buildSky, buildPlume, buildAsh, Dust, CrashFx, MotionBlurEffect } from './fx.js';
+import { Hazards } from './hazards.js';
 import { Debris, Breakables } from './crash.js';
 import { buildProps } from './props.js';
 import { buildVillage } from './village.js';
@@ -81,9 +82,8 @@ addStaticBoxes(phys, village.colliders);
 const debris = new Debris(phys);
 const breakables = new Breakables(phys, debris, [...props.handles, ...village.handles]);
 const crashFx = new CrashFx(M, scene, sun, !!quality.aiLod);
-const crash = { scene, debris, fx: crashFx, breakables };
+const crash = { scene, debris, fx: crashFx, breakables, detail: quality.damageDetail };
 scene.add(camera);
-const speedLines = new SpeedLines(camera);
 loadStep(0.8, 'LOADING TRUCKS…');
 const assets = await loadTruckAssets(renderer);
 
@@ -122,8 +122,8 @@ const vignette = new VignetteEffect({ darkness: 0.45, offset: 0.3 });
 const grain = new NoiseEffect({ blendFunction: BlendFunction.OVERLAY, premultiply: false });
 grain.blendMode.opacity.value = 0.06;
 composer.addPass(new EffectPass(camera, bloom));
-const speedFx = new SpeedEffect();
-composer.addPass(new EffectPass(camera, speedFx));
+const mblur = new MotionBlurEffect(quality.blurSamples);
+composer.addPass(new EffectPass(camera, mblur));
 composer.addPass(new EffectPass(camera, tone, grade, contrast, vignette, grain, new SMAAEffect()));
 
 addEventListener('resize', () => {
@@ -134,7 +134,7 @@ addEventListener('resize', () => {
 });
 
 // ---------------------------------------------------------------- game state
-const rig = new CameraRig(camera, world);
+const rig = new CameraRig(camera, world, phys);
 rig.setMode(S.camera);
 const input = new Input(S);
 const touchEl = $('touch');
@@ -207,6 +207,7 @@ function startRace(cfg) {
     phys, scene, assets, track, opponents: cfg.opponents, difficulty: cfg.difficulty, laps: cfg.laps,
     playerPaint: cfg.paint ?? 0, quality, playerName: S.driver || 'YOU', seed: (cfg.seed ?? Date.now()) & 0xffff, crash,
   });
+  race.hazards = new Hazards({ phys, scene, world, track, fx: crashFx, M, lava, rockMat: props.models.boulder_01?.meshes[0]?.mat, quality, events: race.events });
   slowT = 0; timeScale = 1; rig.cinematic(false);
   hud.dmg.style.width = '0%';
   hud.msg.dataset.fin = '';
@@ -258,7 +259,7 @@ function updateHud(dt) {
   }
   if (!st.finished) hud.msg.dataset.fin = '';
   hud.dmg.style.width = `${Math.round((st.v.damage?.level || 0) * 100)}%`;
-  hud.boostWrap.classList.toggle('red', st.v.boost < 0.05);
+  hud.boostWrap.classList.toggle('red', st.v.boost < 0.1);
   hud.speed.textContent = Math.round(st.v.speed() * 3.6);
   hud.boost.style.width = `${Math.round(st.v.boost * 100)}%`;
   // running order, top four plus the player
@@ -290,7 +291,7 @@ const clock = new THREE.Clock();
 let t = 0, accum = 0, lastFrame = 0, fpsAvg = 60;
 // slow motion for the player's engine blowing: slowT counts down in real seconds
 let slowT = 0, timeScale = 1;
-let msgT = 0;
+let msgT = 0, blurAmt = 0;
 function bigMsg(txt, hold = 2.2) { hud.msg.textContent = txt; hud.msg.classList.remove('pop'); void hud.msg.offsetWidth; hud.msg.classList.add('pop'); msgT = hold; }
 function raceEvents() {
   for (const e of race.events.splice(0)) {
@@ -305,6 +306,10 @@ function raceEvents() {
       if (me && !e.st.v.damage.blown) bigMsg('TOTALED');
       else if (!me && !e.st.v.damage.blown) toast(`${e.st.v.name} is wrecked`);
     } else if (e.type === 'dnf' && me) bigMsg('DNF');
+    else if (e.type === 'quake') rig.bump(Math.min(0.35, e.k ?? 0.15));
+    else if (e.type === 'breakout') { toast('Lava breakout ahead!'); rig.bump(0.3); }
+    else if (e.type === 'loose' && me && e.label) toast(`${e.label} hanging loose`);
+    else if (e.type === 'tyre' && me) toast('Lost a wheel!');
   }
 }
 const tmp = new THREE.Vector3();
@@ -351,16 +356,18 @@ function frame(real) {
     if (state !== 'paused') rig.update(real, race.player.v, race.track, race.player.i, race.player.v.boosting);
     const pv = race.player.v, spd = pv.speed();
     const inCar = rig.cine ? 0 : 1;
-    speedFx.uniforms.get('uAmt').value = inCar * (THREE.MathUtils.clamp((spd - 18) / 34, 0, 1) * 0.3 + (pv.boosting ? 0.15 : 0));
-    speedFx.uniforms.get('uAber').value = inCar * ((pv.boosting ? 0.8 : 0) + (pv.redline ? 1.2 : 0));
-    speedLines.update(real, rig.cine ? 0 : spd);
+    // camera motion blur grows with speed; boost adds a radial streak, redline adds colour fringing
+    const fast = THREE.MathUtils.clamp((spd - 12) / 40, 0, 1);
+    mblur.uniforms.get('uRadial').value = inCar * (fast * 0.012 + (pv.boosting ? 0.03 : 0));
+    mblur.uniforms.get('uAber').value = inCar * ((pv.boosting ? 0.6 : 0) + (pv.redline ? 1.4 : 0));
+    blurAmt = rig.cine ? 0.25 : 0.55 + fast * 0.35;
     focus.copy(race.player.v.group.position);
     updateHud(real);
   } else {
     menuT += dt;
     rig.orbit(dt, menuT + 40, menuCentre, 1150, 260);
-    speedFx.uniforms.get('uAmt').value = 0; speedFx.uniforms.get('uAber').value = 0;
-    speedLines.update(real, 0);
+    mblur.uniforms.get('uRadial').value = 0; mblur.uniforms.get('uAber').value = 0;
+    blurAmt = 0.3;
     focus.set(camera.position.x * 0.5, 0, camera.position.z * 0.5);
   }
   lava.userData.uniforms.uTime.value = t;
@@ -381,6 +388,7 @@ function frame(real) {
   const lp = nearestLava(camera.position);
   lavaLight.position.copy(lp.pos);
   lavaLight.intensity = lp.strength * 120;
+  mblur.track(camera, blurAmt);
   composer.render(dt);
   if (S.showFps) { fpsAvg += (1 / Math.max(real, 1e-3) - fpsAvg) * 0.05; hud.fps.textContent = `${Math.round(fpsAvg)} FPS`; }
   else hud.fps.textContent = '';
@@ -418,6 +426,7 @@ if (still) {
   window.__state = race && { fxn: [crashFx.smoke.i, crashFx.fire.i, crashFx.spark.i, crashFx.time, t], t: race.t, done: race.done, player: race.positionOf(race.player),
     order: race.order.map((c) => ({ name: c.v.name, dist: Math.round(c.dist), lap: c.lap, fin: c.finished, dnf: !!c.dnf, time: c.time && +c.time.toFixed(1), resp: (c.respLog || []).join(' '),
       dmg: +(c.v.damage?.level || 0).toFixed(2), lost: [...(c.v.damage?.lost || [])].join(','), blown: !!c.v.damage?.blown, log: (c.v.damage?.log || []).join(' ') })),
+    hz: race.hazards && { bombs: race.hazards.bombs.length, marks: race.hazards.marks.length, boulders: race.hazards.boulders.length, rolled: race.hazards.nBoulders || 0, dropped: race.hazards.nBombs || 0, lava: race.hazards.lava?.state, hits: race.hazards.hits || 0 },
     knocked: breakables.items.filter((i) => i.state !== 'static').length, props: breakables.items.length, debris: debris.list.length };
   window.__race = race; window.__fx = crashFx;
   window.__ready = true;

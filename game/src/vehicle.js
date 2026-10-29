@@ -15,13 +15,14 @@ export const TUNE = {
   radius: 0.5, rest: 0.6, travel: 0.42,
   stiffness: 34, compression: 3.2, relaxation: 3.8, maxForce: 60000,
   friction: 2.6, side: 1.1,
-  engine: 5200, boost: 3600, brake: 260, reverse: 2600,
-  steerMax: 0.5, topSpeed: 52,
+  engine: 5600, boost: 4000, brake: 260, reverse: 2600,
+  steerMax: 0.5, topSpeed: 55,
 };
 
 // Collision groups: (membership << 16) | filter. Wheel rays only see the ground, so trucks can't stand on each other's roofs.
 const G_GROUND = (0x0001 << 16) | 0xffff;
-const G_CAR = (0x0002 << 16) | 0x0003;
+// trucks also hit hazards (0x0008): volcanic bombs and boulders
+const G_CAR = (0x0002 << 16) | 0x000b;
 const RAY_GROUND = (0xffff << 16) | 0x0001;
 
 export const PAINTS = [
@@ -131,7 +132,8 @@ function paintMaterial(base, paint) {
       .replace('#include <common>', '#include <common>\nuniform vec3 uPaint;\nvarying float vDmg;\nvarying vec3 vLocal;\nfloat dHash(vec3 p){ return fract(sin(dot(floor(p), vec3(12.9898, 78.233, 37.719))) * 43758.5453); }')
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
 float scrape = smoothstep(0.15, 0.9, vDmg * (0.55 + 0.9 * dHash(vLocal * vec3(90.0, 14.0, 90.0))));
-roughnessFactor = mix(roughnessFactor, 0.42, scrape);`)
+roughnessFactor = mix(roughnessFactor, 0.42, scrape);
+roughnessFactor = mix(roughnessFactor, 0.95, smoothstep(1.0, 1.6, vDmg));`)
       .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = mix(metalnessFactor, 0.9, smoothstep(0.15, 0.9, vDmg * (0.55 + 0.9 * dHash(vLocal * vec3(90.0, 14.0, 90.0)))));')
       .replace('#include <map_fragment>', `#include <map_fragment>
 {
@@ -148,6 +150,8 @@ roughnessFactor = mix(roughnessFactor, 0.42, scrape);`)
   float sc = smoothstep(0.15, 0.9, vDmg * (0.55 + 0.9 * dHash(vLocal * vec3(90.0, 14.0, 90.0))));
   diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.36, 0.35, 0.33) * (0.7 + 0.5 * dHash(vLocal * 260.0)), sc);
   diffuseColor.rgb *= 1.0 - smoothstep(0.5, 1.0, vDmg) * 0.35;
+  // values above 1 are fire scorching: blistered, blackened paint
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.03, 0.028, 0.026) * (0.6 + 0.8 * dHash(vLocal * 140.0)), smoothstep(1.0, 1.8, vDmg) * 0.92);
 }`);
     sh.fragmentShader = sh.fragmentShader.replace('#include <lights_physical_fragment>', '#include <lights_physical_fragment>\n#ifdef USE_CLEARCOAT\nmaterial.clearcoat *= 1.0 - smoothstep(0.1, 0.6, vDmg);\n#endif');
   };
@@ -259,7 +263,9 @@ export class Vehicle {
     const v = this.body.linvel();
     const spd = Math.hypot(v.x, v.y, v.z);
     // steering lock falls off with speed
-    const steer = I.steer * T.steerMax * (1 - Math.min(spd / 70, 0.6));
+    // a bent wheel pulls the truck to one side
+    const pull = this.damage ? this.damage.wheels.reduce((a, w, i) => a + (i < 2 ? w.bent * 0.35 : w.bent * 0.15), 0) : 0;
+    const steer = (I.steer * T.steerMax + pull * 0.25) * (1 - Math.min(spd / 70, 0.6));
     vc.setWheelSteering(0, steer);
     vc.setWheelSteering(1, steer);
     let force = 0, brake = 0;
@@ -273,7 +279,7 @@ export class Vehicle {
     const boosting = !!I.boost && can && this.boost > 0 && I.throttle > 0 && !frozen && !dead;
     this.boostLatch = boosting;
     this.boosting = boosting;
-    this.redline = boosting && this.boost < 0.05;
+    this.redline = boosting && this.boost < 0.1;
     if (I.throttle > 0 && !dead) force = T.engine * pw * I.throttle * (1 - Math.min(Math.max(speed, 0) / (T.topSpeed * (0.7 + 0.3 * health) * this.power * (boosting ? 1.25 : 1)), 1) ** 2);
     if (boosting) {
       force += T.boost * (0.6 + 0.4 * health);
@@ -294,7 +300,7 @@ export class Vehicle {
     for (let i = 0; i < 4; i++) {
       vc.setWheelEngineForce(i, force * (i < 2 ? 0.4 : 0.6));
       vc.setWheelBrake(i, brake * (i < 2 ? 0.6 : 0.4) + (i >= 2 ? I.hand * 40 : 0));
-      vc.setWheelSideFrictionStiffness(i, i >= 2 && I.hand ? 0.45 : T.side);
+      if (!this.lostWheels?.has(i)) vc.setWheelSideFrictionStiffness(i, i >= 2 && I.hand ? 0.45 : T.side);
     }
     // rolling resistance when coasting, a little more for a wreck
     if (!frozen && (dead ? !(I.brake > 0) : !I.throttle && !I.brake)) for (let i = 0; i < 4; i++) vc.setWheelBrake(i, dead ? 7 : 4);
@@ -323,6 +329,14 @@ export class Vehicle {
     }
   }
 
+  // a lost tyre leaves the hub running on the ground: low, and with little grip
+  loseWheel(i) {
+    this.vc.setWheelRadius(i, 0.24);
+    this.vc.setWheelFrictionSlip(i, 0.6);
+    this.vc.setWheelSideFrictionStiffness(i, 0.35);
+    (this.lostWheels ||= new Set()).add(i);
+  }
+
   // copy physics into the visual; emits wheel dust when `dust` is given
   sync(dt, time, dust, emitScale = 1) {
     const t = this.body.translation(), q = this.body.rotation();
@@ -340,9 +354,10 @@ export class Vehicle {
         if (!w) continue;
         w.pivot.position.set(this.wheelPts[i][0], this.wheelPts[i][1] - susp, this.wheelPts[i][2]);
         w.pivot.rotation.y = steer;
+        w.pivot.rotation.z = this.damage?.wheels[i].bent || 0;
         w.spin.rotation.x = rot;
       }
-      if (dust && vc.wheelIsInContact(i) && spd > 4 && Math.random() < (0.5 + spd / 60) * emitScale) {
+      if (dust && !this.lostWheels?.has(i) && vc.wheelIsInContact(i) && spd > 4 && Math.random() < (0.5 + spd / 60) * emitScale) {
         const cp = vc.wheelContactPoint(i);
         const side = Math.abs(vc.wheelSideImpulse(i) ?? 0);
         const kick = new THREE.Vector3(-v.x * 0.12 + (Math.random() - 0.5) * 2, 0.8 + Math.random() * 1.2, -v.z * 0.12 + (Math.random() - 0.5) * 2);

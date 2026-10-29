@@ -50,7 +50,7 @@ export class AIDriver {
     laneGoal *= 1 - Math.min(1, turn.total / 0.9) * 0.7;
     const lim = t.width * 0.36;
     laneGoal = Math.max(-lim, Math.min(lim, laneGoal));
-    if (t.jump != null && t.wrap(t.jump - state.i) < 200) laneGoal = 0;
+    for (const j of t.jumps) if (t.wrap(j.at - state.i) < 200) laneGoal = 0;
     this.lane += (laneGoal - this.lane) * Math.min(1, dt * 1.2);
 
     // steering: pure pursuit on a point ahead along the line
@@ -74,9 +74,9 @@ export class AIDriver {
     target *= this.skill;
     // keep off the brakes on the lava jump approach so it clears the gap
     let jumping = false;
-    if (t.jump != null) {
-      const dj = t.wrap(t.jump - i);
-      if (dj > 0 && dj < 220) { target = Math.max(target, dj < 140 ? 60 : 38); jumping = dj < 160; }
+    for (const j of t.jumps) {
+      const dj = t.wrap(j.at - i);
+      if (dj > 0 && dj < 220) { target = Math.max(target, dj < 140 ? j.flat : j.speed); jumping ||= dj < 160 && j.flat >= 50; }
     }
     // occasional small mistakes on easier settings
     if (this.rnd() < this.diff.mistakes * dt * 0.2) this.lift = 0.6 + this.rnd() * 0.8;

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import RAPIER from '@dimforge/rapier3d-compat';
 
 export const CAMERAS = [
   { id: 'chase', name: 'Chase' },
@@ -8,12 +9,15 @@ export const CAMERAS = [
   { id: 'tv', name: 'Trackside TV' },
 ];
 
-const fwd = new THREE.Vector3(), up = new THREE.Vector3(), vel = new THREE.Vector3(), tmp = new THREE.Vector3();
+const fwd = new THREE.Vector3(), up = new THREE.Vector3(), vel = new THREE.Vector3(), tmp = new THREE.Vector3(), aim = new THREE.Vector3();
+const RAY_SOLID = (0xffff << 16) | 0x0001; // terrain, buildings and rocks; not trucks or debris
+const ray = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
 
 export class CameraRig {
-  constructor(camera, world) {
+  constructor(camera, world, phys) {
     this.camera = camera;
     this.world = world;
+    this.phys = phys;
     this.mode = 'chase';
     this.pos = new THREE.Vector3();
     this.look = new THREE.Vector3();
@@ -84,24 +88,26 @@ export class CameraRig {
       up.set(0, 1, 0).applyQuaternion(q).lerp(new THREE.Vector3(0, 1, 0), 0.6).normalize();
       cam.up.copy(up);
       cam.lookAt(this.look);
-      fov = (this.mode === 'hood' ? 70 : 74) + Math.min(spd, 55) * 0.26 + (boosting ? 7 : 0);
+      fov = (this.mode === 'hood' ? 68 : 72) + Math.min(spd, 60) * 0.34 + (boosting ? 10 : 0);
     } else if (this.mode === 'tv') {
       cam.up.set(0, 1, 0);
-      // pick a trackside spot ahead of the truck and hold it until the truck has passed
+      // pick a trackside spot ahead of the truck and hold it until the truck has passed, or the view is blocked
       const n = track.n;
       const ahead = (s) => (track.closed ? ((s - trackI) % n + n) % n : s - trackI);
-      if (!this.tvSpot || ahead(this.tvSpot.i) < -25 || p.distanceTo(this.tvSpot.pos) > 140) {
-        const i = track.wrap(trackI + 70);
-        const f = track.frame(i);
-        const side = (Math.floor(i / 97) % 2 ? 1 : -1) * (track.width / 2 + 9);
-        const x = f.x + f.nx * side, z = f.z + f.nz * side;
-        this.tvSpot = { i, pos: new THREE.Vector3(x, this.world.heightAt(x, z) + 4.5, z) };
+      aim.copy(p).y += 0.9;
+      if (this.tvSpot) this.tvBlocked = this.blocked(this.tvSpot.pos, aim) ? (this.tvBlocked || 0) + dt : 0;
+      if (!this.tvSpot || ahead(this.tvSpot.i) < -25 || p.distanceTo(this.tvSpot.pos) > 130 || this.tvBlocked > 0.25) {
+        this.tvSpot = this.pickTv(track, trackI, aim) || this.tvSpot;
+        this.tvBlocked = 0;
+        this.snap = true;
       }
       cam.position.copy(this.tvSpot.pos);
-      this.look.lerp(tmp.copy(p).add(new THREE.Vector3(0, 0.8, 0)), this.snap ? 1 : 1 - Math.exp(-dt * 8));
+      // aim leads the truck slightly so a fast pass never leaves the frame
+      tmp.set(vel.x, 0, vel.z).multiplyScalar(0.12).add(p); tmp.y += 0.8;
+      this.look.lerp(tmp, this.snap ? 1 : 1 - Math.exp(-dt * 14));
       cam.lookAt(this.look);
       const d = cam.position.distanceTo(p);
-      fov = THREE.MathUtils.clamp(2 * Math.atan(9 / d) * 180 / Math.PI, 14, 60);
+      fov = THREE.MathUtils.clamp(2 * Math.atan(10 / d) * 180 / Math.PI + Math.min(spd, 40) * 2.5 / Math.max(d, 8), 16, 66);
       cam.fov = fov; cam.updateProjectionMatrix();
       this.snap = false;
       return;
@@ -113,8 +119,8 @@ export class CameraRig {
       if (spd > 5) fwd.lerp(vel.clone().normalize(), 0.35).normalize();
       const far = this.mode === 'far';
       // pulls back and drops a little as the speed builds
-      const dist = (far ? 11.5 : 7.2) + spd * 0.045 + (boosting ? 0.6 : 0);
-      const height = (far ? 4.2 : 2.5) - Math.min(spd, 50) * 0.008;
+      const dist = (far ? 11.5 : 7.0) + spd * 0.05 + (boosting ? 1.6 : 0);
+      const height = (far ? 4.2 : 2.5) - Math.min(spd, 50) * 0.014;
       const desired = p.clone().addScaledVector(fwd, -dist);
       desired.y = Math.max(p.y + height, this.world.heightAt(desired.x, desired.z) + 1.2);
       this.pos.lerp(desired, k);
@@ -122,19 +128,60 @@ export class CameraRig {
       this.look.lerp(look, this.snap ? 1 : 1 - Math.exp(-dt * 12));
       cam.position.copy(this.pos);
       cam.lookAt(this.look);
-      fov = (far ? 56 : 59) + Math.min(spd, 55) * 0.34 + (boosting ? 8 : 0);
+      fov = (far ? 55 : 57) + Math.min(spd, 60) * 0.42 + (boosting ? 13 : 0);
     }
     // shake: road speed, crashes, and the engine straining in the last of the boost
     this.kick = Math.max(0, (this.kick || 0) - dt * 1.6);
-    const amp = Math.max(0, spd - 18) * 0.0011 + (v.redline ? 0.075 : 0) + this.kick * 0.35;
+    // in the last 10% of the boost the whole frame judders, a slow lurch plus a fast rattle
+    this.shakeT = (this.shakeT || 0) + dt;
+    const rl = v.redline ? 1 : 0;
+    const amp = Math.max(0, spd - 15) * 0.0016 + rl * 0.2 + this.kick * 0.4;
     if (amp > 0) {
       const r = () => (Math.random() - 0.5) * 2;
-      cam.position.add(tmp.set(r() * amp, r() * amp, r() * amp));
-      cam.rotateZ(r() * amp * (v.redline ? 0.25 : 0.08));
+      const T = this.shakeT;
+      cam.position.add(tmp.set(r() * amp + rl * Math.sin(T * 23) * 0.12, r() * amp + rl * Math.sin(T * 31) * 0.1, r() * amp * 0.5));
+      cam.rotateZ(r() * amp * 0.08 + rl * (Math.sin(T * 17) * 0.035 + r() * 0.03));
+      cam.rotateX(rl * (Math.sin(T * 27) * 0.02 + r() * 0.015));
     }
+    fov += rl * Math.sin(this.shakeT * 13) * 2.5;
     cam.fov += (fov - cam.fov) * (this.snap ? 1 : k);
     cam.updateProjectionMatrix();
     this.snap = false;
+  }
+
+  // terrain, buildings or rocks between a and b
+  blocked(a, b) {
+    const d = tmp.subVectors(b, a); const L = d.length();
+    if (L < 1) return false;
+    d.divideScalar(L);
+    // the heightfield first: cheap, and it catches hills
+    for (let k = 1; k < 10; k++) {
+      const f = k / 10, x = a.x + d.x * L * f, z = a.z + d.z * L * f;
+      if (this.world.heightAt(x, z) > a.y + d.y * L * f - 0.3) return true;
+    }
+    if (!this.phys) return false;
+    ray.origin = { x: a.x, y: a.y, z: a.z }; ray.dir = { x: d.x, y: d.y, z: d.z };
+    return !!this.phys.castRay(ray, L - 2.5, true, undefined, RAY_SOLID);
+  }
+
+  // try trackside spots ahead, both sides, low then high; the first clear view of the truck wins
+  pickTv(track, trackI, aim) {
+    const pref = Math.floor(trackI / 97) % 2 ? 1 : -1;
+    for (const [lead, side, h] of [[70, pref, 4.5], [70, -pref, 4.5], [50, pref, 5], [50, -pref, 5], [90, pref, 8], [35, -pref, 7], [70, pref, 12], [25, pref, 9]]) {
+      const i = track.wrap(trackI + lead);
+      const f = track.frame(i);
+      const off = side * (track.width / 2 + 9);
+      const x = f.x + f.nx * off, z = f.z + f.nz * off;
+      const pos = new THREE.Vector3(x, this.world.heightAt(x, z) + h, z);
+      if (pos.distanceTo(aim) > 120) continue;
+      // check the truck now and the point it is heading to
+      const fr = track.frame(track.wrap(trackI + lead * 0.6));
+      const mid = new THREE.Vector3(fr.x, this.world.heightAt(fr.x, fr.z) + 1, fr.z);
+      if (!this.blocked(pos, aim) && !this.blocked(pos, mid)) return { i, pos };
+    }
+    // nothing clear: hang above and behind the truck so it is always visible
+    const f = track.frame(track.wrap(trackI - 8));
+    return { i: track.wrap(trackI + 30), pos: new THREE.Vector3(f.x, aim.y + 14, f.z) };
   }
 
   // slow orbit around a point, for menus

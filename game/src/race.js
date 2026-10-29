@@ -70,13 +70,9 @@ export class Race {
     const t = this.track;
     (st.respLog ||= []).push(`${st.i}${why}`);
     // never respawn on the run-up to the lava gap: put the truck down on the landing side instead
-    if (t.jump != null) {
-      const ahead = t.wrap(t.jump - st.lastSafe);
-      if (ahead >= 0 && ahead < 160) {
-        let j = t.jump;
-        while (t.at(j)[4]) j = t.wrap(j + 1);
-        st.lastSafe = t.wrap(j + 20);
-      }
+    for (const j of t.jumps) {
+      const ahead = t.wrap(j.at - st.lastSafe);
+      if (ahead >= 0 && ahead < 160) st.lastSafe = j.land;
     }
     const f = t.frame(st.lastSafe);
     const lat = st.isPlayer ? 0 : (st.ai?.lane ?? 0) * 0.5;
@@ -125,8 +121,10 @@ export class Race {
       if (v.damage) v.damage.kind = '';
       if (st?.isPlayer) this.events.push({ type: 'knock', name: it.name, dv });
     });
+    this.hazards?.pre(dt, this);
     for (const st of this.cars) { const v = st.v.body.linvel(); (st.preV ||= new THREE.Vector3()).set(v.x, v.y, v.z); }
     this.phys.step(this.eq);
+    this.hazards?.post(dt, this);
     this.impacts();
     this.crash?.debris.sync(dt);
 
@@ -201,7 +199,7 @@ export class Race {
     this.eq.drainContactForceEvents((e) => {
       const h1 = e.collider1(), h2 = e.collider2();
       const dv = e.totalForceMagnitude() / 60 / 2170;
-      if (dv < 2.4) return;
+      if (dv < 1.4) return;
       for (const [mine, other] of [[h1, h2], [h2, h1]]) {
         const st = this.byCollider.get(mine);
         if (!st?.v.damage) continue;
@@ -221,7 +219,7 @@ export class Race {
         if (car) rel.sub(car.preV);
         const closing = rel.dot(dir);
         const hit = Math.min(dv, Math.max(0, closing) * 1.1);
-        if (hit < 2.4) continue;
+        if (hit < 1.4) continue;
         st.v.damage.kind = car ? 'c' : ground ? '' : 'w';
         // another truck shares the hit
         st.v.damage.hit(dir, car ? hit * 0.6 : hit, pt, ground);
@@ -262,11 +260,12 @@ export class Race {
     for (const st of this.cars) {
       const d = st.v.group.position.distanceTo(camPos);
       st.v.sync(dt, time, d < 90 ? dust : null, st.isPlayer ? 1 : 0.5);
-      st.v.damage?.update(dt, time);
+      st.v.damage?.update(dt, time, st.v.speed() / 25);
     }
   }
 
   dispose() {
+    this.hazards?.dispose();
     for (const st of this.cars) st.v.dispose();
     this.crash?.debris.clear();
     this.crash?.breakables?.reset();

@@ -24,14 +24,14 @@ const PRESET = {
 // ------------------------------------------------------------------ materials
 // wind sway (whole plant bends downwind with the gusts, leaves flutter), in world space so every instance's
 // yaw sees the same wind; aw = (bend, flutter) per vertex, iw = exposure per instance (cliff tops sway more)
-function patchPlant(mat, { leaf = false, texSize = 2048 } = {}) {
+function patchPlant(mat, { leaf = false, texSize = 2048, imp = false } = {}) {
   mat.userData.wx = 'foliage';
   const prev = mat.onBeforeCompile;
   mat.onBeforeCompile = (sh, r) => {
     prev?.call(mat, sh, r);
     Object.assign(sh.uniforms, { uWind: wind.uTime, uWindK: vegWind.strength, uWindDir: vegWind.dir, uSunView: sunView });
     sh.vertexShader = sh.vertexShader.replace('#include <common>', `#include <common>
-uniform float uWind, uWindK; uniform vec2 uWindDir; attribute vec2 aw; attribute float iw;`)
+uniform float uWind, uWindK; uniform vec2 uWindDir; attribute vec2 aw; attribute float iw;${imp ? '\nvarying float vImpA;' : ''}`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
 {
 #ifdef USE_INSTANCING
@@ -45,22 +45,26 @@ uniform float uWind, uWindK; uniform vec2 uWindDir; attribute vec2 aw; attribute
   float sway = b * (0.45 + 0.55 * gust) * (0.75 + 0.25 * sin(uWind * 1.6 + ph) + 0.12 * sin(uWind * 3.1 + ph * 1.7));
   vec3 d = vec3(uWindDir.x, 0.0, uWindDir.y) * sway + vec3(-uWindDir.y, 0.0, uWindDir.x) * b * 0.22 * sin(uWind * 1.2 + ph * 1.3);
   d.y -= sway * sway * 0.08;
-  float fl = aw.y * 0.06 * ex * (0.5 + gust);
+  float fl = max(aw.y, 0.0) * 0.06 * ex * (0.5 + gust);
   d += vec3(sin(uWind * 6.3 + ph + wpos.y * 1.7 + wpos.x), 0.7 * sin(uWind * 8.1 + ph * 1.3 + wpos.z * 1.9), cos(uWind * 7.2 + ph + wpos.z * 1.3 + wpos.y)) * fl;
 #ifdef USE_INSTANCING
   transformed += inverse(mat3(instanceMatrix)) * d;
 #else
   transformed += d;
 #endif
+${imp ? `  // impostors: the flat card over the crown (aw.y < 0) shows only from above, the upright ones fade out there
+  float vup = abs(normalize(wpos - cameraPosition).y);
+  vImpA = aw.y < -0.5 ? smoothstep(0.3, 0.55, vup) : 1.0 - smoothstep(0.8, 0.97, vup);` : ''}
 }`);
     if (leaf && sh.fragmentShader.includes('#include <normal_fragment_begin>')) {
       // cards keep their "out of the crown" normal on both faces, and glow when the sun is behind them
-      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform vec3 uSunView;')
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform vec3 uSunView;' + (imp ? '\nvarying float vImpA;' : ''))
         .replace('#include <normal_fragment_begin>', THREE.ShaderChunk.normal_fragment_begin.replaceAll('normal *= faceDirection;', ''))
         .replace('#include <alphatest_fragment>', `
 #ifdef USE_MAP
   { vec2 dd = fwidth(vMapUv * ${texSize.toFixed(1)}); diffuseColor.a *= 1.0 + max(0.0, log2(max(dd.x, dd.y))) * 0.3; }
 #endif
+${imp ? 'diffuseColor.a *= vImpA;' : ''}
 #include <alphatest_fragment>`)
         .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
   { float tr = pow(max(dot(normalize(-vViewPosition), uSunView), 0.0), 3.0);
@@ -68,7 +72,7 @@ uniform float uWind, uWindK; uniform vec2 uWindDir; attribute vec2 aw; attribute
     }
   };
   const key = mat.customProgramCacheKey?.bind(mat);
-  mat.customProgramCacheKey = () => (key ? key() : '') + (leaf ? '-kplant-leaf' : '-kplant');
+  mat.customProgramCacheKey = () => (key ? key() : '') + (leaf ? '-kplant-leaf' : '-kplant') + (imp ? '-imp' : '');
   return mat;
 }
 
@@ -244,7 +248,7 @@ class Kind {
   add(x, y, z, yaw, s, ex, col) { this.list.push([x, y, z, yaw, s, ex, col]); }
 }
 
-const m4 = new THREE.Matrix4(), q4 = new THREE.Quaternion(), p3 = new THREE.Vector3(), s3 = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
+const up = new THREE.Vector3(0, 1, 0);
 
 class LodSet {
   constructor(kinds, imps, P, group) {
@@ -261,38 +265,47 @@ class LodSet {
       k.start = new Int32Array(GN * GN + 1);
       for (const e of k.list) k.start[cellOf(e) + 1]++;
       for (let c = 0; c < GN * GN; c++) k.start[c + 1] += k.start[c];
-      k.pos = new Float32Array(n * 2); k.mat = new Float32Array(n * 16); k.col = new Float32Array(n * 3); k.ex = new Float32Array(n);
-      if (k.imp) k.imat = new Float32Array(n * 16);
+      // compact per instance (x, y, z, cos * scale, sin * scale): the matrix is built as it is drawn
+      k.pos = new Float32Array(n * 2); k.tr = new Float32Array(n * 5); k.col = new Float32Array(n * 3); k.ex = new Float32Array(n);
       k.list.forEach((e, i) => {
         k.pos[i * 2] = e[0]; k.pos[i * 2 + 1] = e[2];
-        q4.setFromAxisAngle(up, e[3]);
-        m4.compose(p3.set(e[0], e[1], e[2]), q4, s3.setScalar(e[4])).toArray(k.mat, i * 16);
-        if (k.imp) m4.compose(p3, q4, s3.setScalar(e[4] * k.imp.scale)).toArray(k.imat, i * 16);
+        k.tr.set([e[0], e[1], e[2], Math.cos(e[3]) * e[4], Math.sin(e[3]) * e[4]], i * 5);
         k.col.set(e[6], i * 3); k.ex[i] = e[5];
       });
       k.list = null;
       // a light model for the middle distance where the plant has one; low settings use only that
       const lo = k.model.loParts?.length ? k.model.loParts : null;
       k.full = lo ? P.full : 1;
-      k.meshes = k.full > 0 ? this.makeMesh(k.model.parts, n, group, k.shadow) : [];
-      k.meshesLo = lo ? this.makeMesh(lo, n, group, k.shadow) : [];
+      const cap = Math.min(n, this.capacity(k, P.near * k.near));
+      k.meshes = k.full > 0 ? this.makeMesh(k.model.parts, cap, group, k.shadow) : [];
+      k.meshesLo = lo ? this.makeMesh(lo, cap, group, k.shadow) : [];
     }
     for (const imp of imps) {
-      const n = this.kinds.filter((k) => k.imp?.type === imp).reduce((s, k) => s + k.pos.length / 2, 0);
+      const n = this.kinds.filter((k) => k.imp?.type === imp).reduce((s, k) => s + Math.min(k.pos.length / 2, this.capacity(k, P.far)), 0);
       imp.meshes = n ? this.makeMesh([{ geo: imp.geo, mat: imp.mat }], n, group, false) : [];
     }
     this.nearAt = null; this.farAt = null;
   }
 
+  // the most instances of a kind within r of any point (a box sum over the 64 m cells): the buffers' size
+  capacity(k, r) {
+    const { GN, CELL } = this, w = Math.ceil(r / CELL);
+    let best = 0;
+    for (let j = 0; j < GN; j++) for (let i = 0; i < GN; i++) {
+      let s = 0;
+      for (let b = Math.max(0, j - w); b <= Math.min(GN - 1, j + w); b++) s += k.start[b * GN + Math.min(GN - 1, i + w) + 1] - k.start[b * GN + Math.max(0, i - w)];
+      if (s > best) best = s;
+    }
+    return Math.max(16, best);
+  }
+
   // one InstancedMesh per part (bark, leaves), all sharing one set of instance buffers
   makeMesh(parts, n, group, shadow) {
-    const matA = new THREE.InstancedBufferAttribute(new Float32Array(n * 16), 16).setUsage(THREE.DynamicDrawUsage);
-    const colA = new THREE.InstancedBufferAttribute(new Float32Array(n * 3), 3).setUsage(THREE.DynamicDrawUsage);
-    const exA = new THREE.InstancedBufferAttribute(new Float32Array(n), 1).setUsage(THREE.DynamicDrawUsage);
+    const [matA, colA, exA] = this.buffers(n);
     return parts.map(({ geo, mat }) => {
       const g = geo.clone();
       g.setAttribute('iw', exA);
-      const im = new THREE.InstancedMesh(g, mat, n);
+      const im = new THREE.InstancedMesh(g, mat, 0);
       im.instanceMatrix = matA; im.instanceColor = colA;
       im.count = 0; im.visible = false;
       im.frustumCulled = false;
@@ -304,15 +317,32 @@ class LodSet {
   }
 
   // writes instances straight into a mesh set's buffers
+  buffers(n) {
+    return [new THREE.InstancedBufferAttribute(new Float32Array(n * 16), 16), new THREE.InstancedBufferAttribute(new Float32Array(n * 3), 3),
+      new THREE.InstancedBufferAttribute(new Float32Array(n), 1)].map((a) => a.setUsage(THREE.DynamicDrawUsage));
+  }
   writer(meshes) {
     if (!meshes.length) return null;
     return { meshes, A: meshes[0].instanceMatrix.array, C: meshes[0].instanceColor.array, E: meshes[0].geometry.attributes.iw.array, n: 0 };
   }
-  put(w, k, i, mats) {
-    const n = w.n++, o = n * 16, s = i * 16;
-    for (let j = 0; j < 16; j++) w.A[o + j] = mats[s + j];
+  // one instance: rotation about y, uniform scale (times sm), position
+  put(w, k, i, sm = 1) {
+    if (w.n * 16 >= w.A.length) this.grow(w);
+    const n = w.n++, o = n * 16, t = k.tr, b = i * 5, c = t[b + 3] * sm, s = t[b + 4] * sm;
+    const A = w.A;
+    A[o] = c; A[o + 1] = 0; A[o + 2] = -s; A[o + 3] = 0;
+    A[o + 4] = 0; A[o + 5] = Math.hypot(c, s); A[o + 6] = 0; A[o + 7] = 0;
+    A[o + 8] = s; A[o + 9] = 0; A[o + 10] = c; A[o + 11] = 0;
+    A[o + 12] = t[b]; A[o + 13] = t[b + 1]; A[o + 14] = t[b + 2]; A[o + 15] = 1;
     w.C[n * 3] = k.col[i * 3]; w.C[n * 3 + 1] = k.col[i * 3 + 1]; w.C[n * 3 + 2] = k.col[i * 3 + 2];
     w.E[n] = k.ex[i];
+  }
+  // more in range than the estimate: double the buffers (rare)
+  grow(w) {
+    const [A, C, E] = this.buffers(w.A.length / 8);
+    A.array.set(w.A); C.array.set(w.C); E.array.set(w.E);
+    for (const m of w.meshes) { m.instanceMatrix = A; m.instanceColor = C; m.geometry.setAttribute('iw', E); }
+    w.A = A.array; w.C = C.array; w.E = E.array;
   }
   done(w) {
     if (!w) return;
@@ -344,7 +374,7 @@ class LodSet {
       this.nearAt = { x, z };
       for (const k of this.kinds) {
         const hi = this.writer(k.meshes), lo = this.writer(k.meshesLo), r = P.near * k.near, rf2 = (r * k.full) ** 2;
-        this.walk(k, x, z, r, (i, d2) => { const w = d2 < rf2 ? hi : lo; if (w) this.put(w, k, i, k.mat); });
+        this.walk(k, x, z, r, (i, d2) => { const w = d2 < rf2 ? hi : lo; if (w) this.put(w, k, i); });
         this.done(hi); this.done(lo);
       }
     }
@@ -362,7 +392,8 @@ class LodSet {
       for (const k of this.kinds) {
         if (k.imp?.type !== imp) continue;
         const rn = Math.max(0, P.near * k.near - MARGIN), rn2 = rn * rn;
-        this.walk(k, x, z, P.far, (i, d2) => { if (d2 >= rn2) this.put(w, k, i, k.imat); });
+        const sm = k.imp.scale;
+        this.walk(k, x, z, P.far, (i, d2) => { if (d2 >= rn2) this.put(w, k, i, sm); });
       }
       this.done(w);
     }
@@ -460,7 +491,7 @@ function bakeImpostors(renderer, types, mats) {
       const tp = ty.top, o = p.length / 3, t = Math.max(0, tp.y) / H;
       for (const [a, b] of [[-1, 1], [1, 1], [1, -1], [-1, -1]]) {
         p.push(tp.cx + a * tp.half, tp.y, tp.cz + b * tp.half);
-        n.push(0, 1, 0); c.push(1, 1, 1); w.push(t * t * H / 10, 0);
+        n.push(0, 1, 0); c.push(1, 1, 1); w.push(t * t * H / 10, -1);
       }
       uv.push(tp.u0, tp.v0, tp.u1, tp.v0, tp.u1, tp.v1, tp.u0, tp.v1);
       idx.push(o, o + 1, o + 2, o, o + 2, o + 3);
@@ -538,7 +569,7 @@ export async function buildVegetation(ctx) {
   // impostor types: one picture per kind of tree silhouette
   const impTypes = [{ model: palms[palms.length - 1] }, { model: trees[0] }, { model: pales[0] }, { model: bamboos[0] }];
   const rt = bakeImpostors(renderer, impTypes, mats);
-  const impMat = patchPlant(new THREE.MeshStandardMaterial({ map: rt.texture, alphaTest: 0.45, side: THREE.DoubleSide, vertexColors: true, roughness: 0.85, metalness: 0, envMapIntensity: 0.4 }), { leaf: true, texSize: 2048 });
+  const impMat = patchPlant(new THREE.MeshStandardMaterial({ map: rt.texture, alphaTest: 0.45, side: THREE.DoubleSide, vertexColors: true, roughness: 0.85, metalness: 0, envMapIntensity: 0.4 }), { leaf: true, texSize: 2048, imp: true });
   for (const t of impTypes) { t.mat = impMat; t.H = t.model.H; }
   const [impPalm, impTree, impPale, impBamboo] = impTypes;
 

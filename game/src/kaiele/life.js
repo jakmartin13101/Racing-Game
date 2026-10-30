@@ -121,7 +121,7 @@ export async function buildLife(ctx, veg) {
       const side = rnd() < 0.5 ? -1 : 1, lat = side * (wl.width / 2 + 9 + rnd() * 8);
       const x = f.x + f.nx * lat, z = f.z + f.nz * lat;
       if (F.waterAt(x, z) < 3) continue;
-      const top = world.heightAt(x, z) + (rows.includes(i) ? 22 : 16) + rnd() * 4;
+      const top = F.groundAt(x, z) + (rows.includes(i) ? 22 : 16) + rnd() * 4;
       const site = { x, z, y: top, row: i, out: [f.nx * side, f.nz * side], t: -1, cool: 0, birds: [] };
       const n = lite ? 6 : 11;
       for (let k = 0; k < n; k++) {
@@ -263,7 +263,7 @@ export async function buildLife(ctx, veg) {
           if ((c.x - c.hx) ** 2 + (c.z - c.hz) ** 2 > 100) { c.vx = (c.hx - c.x) * 0.3; c.vz = (c.hz - c.z) * 0.3; }
         }
         if (dc > 160 * 160) continue;
-        const gy = world.heightAt(c.x, c.z);
+        const gy = F.groundAt(c.x, c.z);
         if (gy < 0.15) { c.state = 'hidden'; c.t = 5; continue; }
         const bob = c.state === 'flee' ? Math.abs(Math.sin(t * 40 + c.hx)) * 0.02 : 0;
         m4.compose(p.set(c.x, gy - c.sink * 0.12 + bob, c.z), q.setFromAxisAngle(s.set(0, 1, 0), c.yaw), s.setScalar(c.s));

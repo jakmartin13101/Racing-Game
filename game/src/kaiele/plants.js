@@ -314,7 +314,7 @@ export function treeFern(rnd, { trunkH = 3, L = 3, detail = 1 } = {}) {
     const pts = [];
     const lean = (rnd() - 0.5) * 0.3;
     for (let k = 0; k <= 4; k++) pts.push(V(Math.sin(lean) * trunkH * (k / 4) ** 2, trunkH * k / 4, 0));
-    bark.tube(pts, (t) => 0.17 + 0.1 * (1 - t) ** 2, 7, STRIP.fern, tint(rnd, [1, 1, 1], 0.1), 0.25, true);
+    bark.tube(pts, (t) => 0.22 + 0.14 * (1 - t) ** 2 + 0.05 * t * t, 7, STRIP.fern, tint(rnd, [1, 1, 1], 0.1), 0.25, true);
     C = pts[4];
   }
   const F = 11 + Math.floor(rnd() * 5);
@@ -325,7 +325,7 @@ export function treeFern(rnd, { trunkH = 3, L = 3, detail = 1 } = {}) {
     const el = young ? 1.3 : 0.55 + rnd() * 0.55;
     const len = L * (young ? 0.55 : 0.8 + rnd() * 0.3);
     const spine = arch(C.clone().add(dirFrom(az, 0).multiplyScalar(0.1)), az, el, len, young ? 0.2 : 1.1 + rnd() * 0.6, segs);
-    leaves.ribbon(spine, len * 0.24, CELLS.fern, tint(rnd, young ? [1.1, 1.15, 0.9] : [1, 1, 1], 0.1), { fold: 0.18, centre: C.clone().add(V(0, -0.3, 0)), flut: 1 }, f % 2 === 0);
+    leaves.ribbon(spine, len * 0.24, CELLS.fern, tint(rnd, young ? [1.1, 1.15, 0.9] : [1, 1, 1], 0.1), { fold: 0.18, centre: C.clone().add(V(0, -0.3, 0)), flut: 1 }, f % 3 !== 2);
   }
   return Dual.prototype.out(bark, leaves, { H, trunkR: 0.25 });
 }
@@ -402,10 +402,11 @@ export function leafClump(rnd, c, { n = 7, s = 1.1, detail = 1 } = {}) {
   const centre = V(0, 0.2, 0);
   const cnt = n;
   for (let i = 0; i < cnt; i++) {
-    const a = i * 2.39996 + rnd() * 0.5, el = 0.5 + rnd() * 0.6;
+    const a = i * 2.39996 + rnd() * 0.5, el = 0.8 + rnd() * 0.5;
     const size = s * (0.75 + rnd() * 0.5);
     const d = dirFrom(a, el);
-    const base = V(Math.cos(a) * 0.15, 0.15 + rnd() * 0.5 * s, Math.sin(a) * 0.15);
+    // the blades rise straight out of the ground on short stalks (hidden in the clump)
+    const base = V(Math.cos(a) * 0.12, -0.05 + rnd() * 0.15 * s, Math.sin(a) * 0.12);
     const right = d.clone().cross(UP).normalize().multiplyScalar(size * 0.9);
     const up = right.clone().cross(d).normalize();
     if (up.y < 0) up.negate();

@@ -78,6 +78,24 @@ function depthFor(mat) {
   return patchPlant(d);
 }
 
+// ------------------------------------------------------------------ the rendered ground
+// Plants stand on the terrain mesh as drawn, which is coarser than the baked heightfield (on a steep slope the two
+// differ by metres). The terrain module can publish world.groundAt; otherwise this follows terrain.js's grid
+// (step max(3, terrainStep * 2.5), each square split along the b-c diagonal).
+export function groundFn(world, quality) {
+  if (world.groundAt) return world.groundAt;
+  const step = Math.max(3, quality.terrainStep * 2.5), half = world.half;
+  return (x, z) => {
+    const fx = (x + half) / step, fz = (z + half) / step;
+    const i = Math.floor(fx), j = Math.floor(fz), tx = fx - i, tz = fz - j;
+    const x0 = -half + i * step, z0 = -half + j * step;
+    const hb = world.heightAt(x0 + step, z0), hc = world.heightAt(x0, z0 + step);
+    if (tx + tz <= 1) { const ha = world.heightAt(x0, z0); return ha + (hb - ha) * tx + (hc - ha) * tz; }
+    const hd = world.heightAt(x0 + step, z0 + step);
+    return hd + (hc - hd) * (1 - tx) + (hb - hd) * (1 - tz);
+  };
+}
+
 // ------------------------------------------------------------------ data readback
 // a PNG's raw texels. Through a canvas the browser premultiplies alpha (and zeroes colour where alpha is 0, as on
 // biome.png away from bare rock), so read it back from a WebGL texture with premultiplication off.
@@ -179,11 +197,19 @@ function buildFields(world, biome, lavaMask, masks) {
   const q = { edge: 1e9, d: 1e9, t: -1, i: -1 };
   const trackAt = (x, z) => {
     q.edge = 1e9; q.d = 1e9; q.t = -1; q.i = -1;
-    if (track[cellOf(x, z)] > 44) return q;
-    near(th, x, z, (p) => {
-      const d = Math.hypot(p[0] - x, p[1] - z), e = d - p[4] / 2;
-      if (e < q.edge) { q.edge = e; q.d = d; q.t = p[2]; q.i = p[3]; }
-    });
+    // callers only need it close in (clearances under 12 m, colliders within 15 m of the edge)
+    if (track[cellOf(x, z)] > 34) return q;
+    const gx = Math.floor(x / th.cs), gz = Math.floor(z / th.cs);
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) {
+      const l = th.m.get((gx + a) * 4096 + gz + b);
+      if (!l) continue;
+      for (let k = 0; k < l.length; k++) {
+        const p = l[k], dx = p[0] - x, dz = p[1] - z, d2 = dx * dx + dz * dz, lim = q.edge + p[4] / 2;
+        if (d2 >= lim * lim) continue;
+        const d = Math.sqrt(d2);
+        q.edge = d - p[4] / 2; q.d = d; q.t = p[2]; q.i = p[3];
+      }
+    }
     return q;
   };
   const sample = (img, x, z, ch) => {
@@ -277,21 +303,25 @@ class LodSet {
     });
   }
 
-  fill(meshes, list) {
-    if (!meshes.length) return;
-    const A = meshes[0].instanceMatrix, C = meshes[0].instanceColor, E = meshes[0].geometry.attributes.iw;
-    let n = 0;
-    for (const [k, i, mats] of list) {
-      A.array.set(mats.subarray(i * 16, i * 16 + 16), n * 16);
-      C.array.set(k.col.subarray(i * 3, i * 3 + 3), n * 3);
-      E.array[n] = k.ex[i];
-      n++;
-    }
-    for (const a of [A, C, E]) { a.clearUpdateRanges(); a.addUpdateRange(0, n * a.itemSize); a.needsUpdate = true; }
-    for (const m of meshes) { m.count = n; m.visible = n > 0; }
+  // writes instances straight into a mesh set's buffers
+  writer(meshes) {
+    if (!meshes.length) return null;
+    return { meshes, A: meshes[0].instanceMatrix.array, C: meshes[0].instanceColor.array, E: meshes[0].geometry.attributes.iw.array, n: 0 };
+  }
+  put(w, k, i, mats) {
+    const n = w.n++, o = n * 16, s = i * 16;
+    for (let j = 0; j < 16; j++) w.A[o + j] = mats[s + j];
+    w.C[n * 3] = k.col[i * 3]; w.C[n * 3 + 1] = k.col[i * 3 + 1]; w.C[n * 3 + 2] = k.col[i * 3 + 2];
+    w.E[n] = k.ex[i];
+  }
+  done(w) {
+    if (!w) return;
+    const m0 = w.meshes[0];
+    for (const a of [m0.instanceMatrix, m0.instanceColor, m0.geometry.attributes.iw]) { a.clearUpdateRanges(); a.addUpdateRange(0, w.n * a.itemSize); a.needsUpdate = true; }
+    for (const m of w.meshes) { m.count = w.n; m.visible = w.n > 0; }
   }
 
-  // walk the cells within r of (x, z), calling f(kind, index, d2)
+  // walk the cells within r of (x, z), calling f(index, d2)
   walk(k, x, z, r, f) {
     const { CELL, GN } = this;
     const i0 = Math.max(0, Math.floor((x - r + 2048) / CELL)), i1 = Math.min(GN - 1, Math.floor((x + r + 2048) / CELL));
@@ -313,40 +343,43 @@ class LodSet {
     if (force || !this.nearAt || Math.hypot(x - this.nearAt.x, z - this.nearAt.z) > 6) {
       this.nearAt = { x, z };
       for (const k of this.kinds) {
-        const hi = [], lo = [], r = P.near * k.near, rf2 = (r * k.full) ** 2;
-        this.walk(k, x, z, r, (i, d2) => (d2 < rf2 ? hi : lo).push([k, i, k.mat]));
-        this.fill(k.meshes, hi);
-        this.fill(k.meshesLo, lo);
+        const hi = this.writer(k.meshes), lo = this.writer(k.meshesLo), r = P.near * k.near, rf2 = (r * k.full) ** 2;
+        this.walk(k, x, z, r, (i, d2) => { const w = d2 < rf2 ? hi : lo; if (w) this.put(w, k, i, k.mat); });
+        this.done(hi); this.done(lo);
       }
     }
-    // impostors: everything with one, from just inside the near radius out to the far radius
+    // impostors: everything with one, from just inside the near radius out to the far radius. Each type keeps
+    // its own centre and at most one type is rebuilt per frame, so the work is spread out
     const MARGIN = 40;
-    if (force || !this.farAt || Math.hypot(x - this.farAt.x, z - this.farAt.z) > MARGIN) {
-      this.farAt = { x, z };
-      for (const imp of this.imps) {
-        const list = [];
-        for (const k of this.kinds) {
-          if (k.imp?.type !== imp) continue;
-          const rn = Math.max(0, P.near * k.near - MARGIN), rn2 = rn * rn;
-          this.walk(k, x, z, P.far, (i, d2) => { if (d2 >= rn2) list.push([k, i, k.imat]); });
-        }
-        this.fill(imp.meshes, list);
+    let budget = force ? this.imps.length : 1;
+    for (const imp of this.imps) {
+      if (!budget) break;
+      if (!force && imp.at && Math.hypot(x - imp.at.x, z - imp.at.z) < 28) continue;
+      budget--;
+      imp.at = { x, z };
+      const w = this.writer(imp.meshes);
+      if (!w) continue;
+      for (const k of this.kinds) {
+        if (k.imp?.type !== imp) continue;
+        const rn = Math.max(0, P.near * k.near - MARGIN), rn2 = rn * rn;
+        this.walk(k, x, z, P.far, (i, d2) => { if (d2 >= rn2) this.put(w, k, i, k.imat); });
       }
+      this.done(w);
     }
   }
 }
 
 // ------------------------------------------------------------------ impostors
-// each tree type rendered once, front and side, into a 4x2 atlas (albedo with its baked crown shading);
-// far away a tree is two crossed cards with that picture
+// each tree type rendered once, front, side and from above, into a 4x3 atlas (albedo with its baked crown shading);
+// far away a tree is two crossed cards with those pictures and a flat one across the crown for views from the air
 function bakeImpostors(renderer, types, mats) {
   const S = 512;
-  const rt = new THREE.WebGLRenderTarget(S * 4, S * 2, { generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter });
+  const rt = new THREE.WebGLRenderTarget(S * 4, S * 3, { generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter });
   rt.texture.colorSpace = THREE.SRGBColorSpace;
   const scene = new THREE.Scene();
   const basicL = new THREE.MeshBasicMaterial({ map: mats.leaf.map, alphaTest: 0.5, vertexColors: true, side: THREE.DoubleSide });
   const basicB = new THREE.MeshBasicMaterial({ map: mats.bark.map, vertexColors: true });
-  const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 200);
+  const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 400);
   const prev = { rt: renderer.getRenderTarget(), auto: renderer.autoClear, col: renderer.getClearColor(new THREE.Color()), a: renderer.getClearAlpha(), shadow: renderer.shadowMap.autoUpdate };
   renderer.setRenderTarget(rt);
   renderer.setClearColor(0x3a5226, 0);
@@ -361,7 +394,20 @@ function bakeImpostors(renderer, types, mats) {
     const box = new THREE.Box3();
     for (const m of meshes) box.union(m.geometry.boundingBox);
     ty.views = [];
-    for (let v = 0; v < 2; v++) {
+    for (let v = 0; v < 3; v++) {
+      const cell = ti * 3 + v, x0 = cell % 4, y0 = Math.floor(cell / 4);
+      if (v === 2) {
+        // from above: screen right is +x, screen up is -z
+        const half = Math.max(box.max.x - box.min.x, box.max.z - box.min.z) / 2, cx = (box.min.x + box.max.x) / 2, cz = (box.min.z + box.max.z) / 2;
+        cam.left = -half; cam.right = half; cam.top = half; cam.bottom = -half;
+        cam.updateProjectionMatrix();
+        cam.up.set(0, 0, -1); cam.position.set(cx, box.max.y + 20, cz); cam.lookAt(cx, 0, cz); cam.updateMatrixWorld(); cam.up.set(0, 1, 0);
+        rt.viewport.set(x0 * S, y0 * S, S, S); rt.scissor.set(x0 * S, y0 * S, S, S); rt.scissorTest = true;
+        renderer.setRenderTarget(rt);
+        renderer.render(scene, cam);
+        ty.top = { u0: x0 / 4, u1: (x0 + 1) / 4, v0: y0 / 3, v1: (y0 + 1) / 3, cx, cz, half, y: box.min.y + (box.max.y - box.min.y) * 0.62 };
+        continue;
+      }
       // view 0 looks along -z (sees x), view 1 along +x (sees z)
       const lo = v ? box.min.z : box.min.x, hi = v ? box.max.z : box.max.x;
       const w = Math.max(hi - lo, 1), H = box.max.y - Math.min(0, box.min.y);
@@ -372,16 +418,15 @@ function bakeImpostors(renderer, types, mats) {
       const yb = Math.min(0, box.min.y);
       if (v) { cam.position.set(-100, yb, cx); cam.lookAt(0, yb, cx); } else { cam.position.set(cx, yb, 100); cam.lookAt(cx, yb, 0); }
       cam.updateMatrixWorld();
-      const x0 = (ti % 2) * 2 + v, y0 = Math.floor(ti / 2);
       rt.viewport.set(x0 * S, y0 * S, S, S); rt.scissor.set(x0 * S, y0 * S, S, S); rt.scissorTest = true;
       renderer.setRenderTarget(rt);
       renderer.render(scene, cam);
-      ty.views.push({ u0: x0 / 4, u1: (x0 + 1) / 4, v0: y0 / 2, v1: (y0 + 1) / 2, cx, size, y0: yb });
+      ty.views.push({ u0: x0 / 4, u1: (x0 + 1) / 4, v0: y0 / 3, v1: (y0 + 1) / 3, cx, size, y0: yb });
     }
     for (const m of meshes) scene.remove(m);
   });
   rt.scissorTest = false;
-  rt.viewport.set(0, 0, S * 4, S * 2);
+  rt.viewport.set(0, 0, S * 4, S * 3);
   renderer.setRenderTarget(prev.rt);
   renderer.autoClear = prev.auto;
   renderer.setClearColor(prev.col, prev.a);
@@ -411,6 +456,15 @@ function bakeImpostors(renderer, types, mats) {
       uv.push(vw.u0, vw.v0, vw.u1, vw.v0, vw.u1, vw.v1, vw.u0, vw.v1);
       idx.push(o, o + 1, o + 2, o, o + 2, o + 3);
     });
+    {
+      const tp = ty.top, o = p.length / 3, t = Math.max(0, tp.y) / H;
+      for (const [a, b] of [[-1, 1], [1, 1], [1, -1], [-1, -1]]) {
+        p.push(tp.cx + a * tp.half, tp.y, tp.cz + b * tp.half);
+        n.push(0, 1, 0); c.push(1, 1, 1); w.push(t * t * H / 10, 0);
+      }
+      uv.push(tp.u0, tp.v0, tp.u1, tp.v0, tp.u1, tp.v1, tp.u0, tp.v1);
+      idx.push(o, o + 1, o + 2, o, o + 2, o + 3);
+    }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(p, 3));
     g.setAttribute('normal', new THREE.Float32BufferAttribute(n, 3));
@@ -445,7 +499,10 @@ export async function buildVegetation(ctx) {
   const group = new THREE.Group();
   group.name = 'kaiele-vegetation';
   scene.add(group);
+  const tf = performance.now();
   const F = buildFields(world, biome, lavaMask, masks);
+  const groundAt = groundFn(world, quality);
+  F.groundAt = groundAt;
   const D = P.detail;
 
   // ---------------------------------------------------------------- models
@@ -481,7 +538,7 @@ export async function buildVegetation(ctx) {
   // impostor types: one picture per kind of tree silhouette
   const impTypes = [{ model: palms[palms.length - 1] }, { model: trees[0] }, { model: pales[0] }, { model: bamboos[0] }];
   const rt = bakeImpostors(renderer, impTypes, mats);
-  const impMat = patchPlant(new THREE.MeshStandardMaterial({ map: rt.texture, alphaTest: 0.45, side: THREE.DoubleSide, vertexColors: true, roughness: 0.85, metalness: 0, envMapIntensity: 0.4 }), { leaf: true, texSize: 1024 });
+  const impMat = patchPlant(new THREE.MeshStandardMaterial({ map: rt.texture, alphaTest: 0.45, side: THREE.DoubleSide, vertexColors: true, roughness: 0.85, metalness: 0, envMapIntensity: 0.4 }), { leaf: true, texSize: 2048 });
   for (const t of impTypes) { t.mat = impMat; t.H = t.model.H; }
   const [impPalm, impTree, impPale, impBamboo] = impTypes;
 
@@ -527,7 +584,10 @@ export async function buildVegetation(ctx) {
     if (t.id === 'kahakai') keepOut.push([s[0], s[2], 30]);
   }
   for (const b of data.buildings || []) keepOut.push([b.x, b.z, Math.max(b.w, b.d) / 2 + 3.5]);
-  const kept = (x, z, pad = 0) => keepOut.some(([a, b, r]) => (x - a) ** 2 + (z - b) ** 2 < Math.max(0, r + pad) ** 2);
+  // flag the coarse cells near a set piece so most points skip the list
+  const keepCell = new Uint8Array(F.G * F.G);
+  for (const [a, b, r] of keepOut) for (let dz = -r - 16; dz <= r + 16; dz += 4) for (let dx = -r - 16; dx <= r + 16; dx += 4) keepCell[F.cellOf(a + dx, b + dz)] = 1;
+  const kept = (x, z, pad = 0) => keepCell[F.cellOf(x, z)] === 1 && keepOut.some(([a, b, r]) => (x - a) ** 2 + (z - b) ** 2 < Math.max(0, r + pad) ** 2);
   const jungle = (ti) => data.tracks[ti]?.id === 'wailele';
   // clearance from the road edge by plant size; the jungle trail runs between walls of green
   const clear = (q, size) => {
@@ -555,6 +615,7 @@ export async function buildVegetation(ctx) {
 
   // ---------------------------------------------------------------- the canopy tunnel on the jungle trail
   const tunnelRows = [];
+  const Nrm = new THREE.Vector3();
   const wl = tracks.find((t) => t.id === 'wailele');
   if (wl && wl.gorge && wl.trestle) {
     const a = wl.gorge.land + 12, b = wl.trestle[0] - 8;
@@ -568,19 +629,24 @@ export async function buildVegetation(ctx) {
       const road = wl.c[ii][1];
       for (const side of [-1, 1]) {
         if (ii < gapUntil && (gapSide === 0 || gapSide === side)) continue;
-        const lat = side * (wl.width / 2 + 3 + rnd() * 3.5);
-        const x = f.x + f.nx * lat + f.tx * (rnd() - 0.5) * 2, z = f.z + f.nz * lat + f.tz * (rnd() - 0.5) * 2;
-        const q = F.trackAt(x, z);
-        if (!clear(q, 'tree') || F.waterAt(x, z) < 4 || kept(x, z)) continue;
-        const gy = world.heightAt(x, z);
-        let k = Math.floor(rnd() * kTunnel.length);
-        const m = tunnel[k];
-        const s = THREE.MathUtils.clamp((Math.abs(lat) + 1.5 + rnd() * 2) / m.reach, 0.75, 1.3);
-        // vines and low leaves over the road must hang above a truck on a jump
-        if (gy + m.lowOver * s < road + 6.5) { k = 1; if (gy + tunnel[1].lowOver * s < road + 6.5) continue; }
-        const yaw = yawToward(-f.nx * side, -f.nz * side) + (rnd() - 0.5) * 0.3;
-        kTunnel[k].add(x, gy - 0.3, z, yaw, s, 0.8, tint([1, 1, 1], [0.85, 0.95, 0.8], rnd()));
-        collide(x, gy, z, tunnel[k].trunkR * s, yaw, 8);
+        // a few spots out from the verge: the first that is not water, cliff or too low to clear the trucks
+        for (const [l0, l1] of [[3, 6.5], [6.5, 10], [2.8, 4]]) {
+          const lat = side * (wl.width / 2 + l0 + rnd() * (l1 - l0));
+          const x = f.x + f.nx * lat + f.tx * (rnd() - 0.5) * 2, z = f.z + f.nz * lat + f.tz * (rnd() - 0.5) * 2;
+          const q = F.trackAt(x, z);
+          if (!clear(q, 'tree') || F.waterAt(x, z) < 4 || kept(x, z)) continue;
+          if (world.normalAt(x, z, Nrm).y < 0.35) continue;
+          // on the steep banks the buttresses sink into the slope
+          const gy = groundAt(x, z) - (1 - Nrm.y) * 4;
+          let k = Math.floor(rnd() * kTunnel.length);
+          const s = THREE.MathUtils.clamp((Math.abs(lat) + 1.5 + rnd() * 2) / tunnel[k].reach, 0.75, 1.3);
+          // vines and low leaves over the road must hang above a truck on a jump
+          if (gy + tunnel[k].lowOver * s < road + 6.5) { k = 1; if (gy + tunnel[1].lowOver * s < road + 6.5) continue; }
+          const yaw = yawToward(-f.nx * side, -f.nz * side) + (rnd() - 0.5) * 0.3;
+          kTunnel[k].add(x, gy - 0.3, z, yaw, s, 0.8, tint([1, 1, 1], [0.85, 0.95, 0.8], rnd()));
+          collide(x, gy, z, tunnel[k].trunkR * s, yaw, 8);
+          break;
+        }
       }
     }
   }
@@ -588,6 +654,7 @@ export async function buildVegetation(ctx) {
   // ---------------------------------------------------------------- the island, cell by cell
   const { G, CS, half } = F;
   const t0 = performance.now();
+  const fieldMs = Math.round(t0 - tf);
   let nTry = 0;
   for (let j = 0; j < G; j++) for (let i = 0; i < G; i++) {
     const c = j * G + i;
@@ -605,12 +672,15 @@ export async function buildVegetation(ctx) {
     const forest = ss(0.45, 0.85, v) * ss(15, 60, cst) * (1 - 0.9 * headland) * (1 - 0.92 * lowCoast);
     const area = CS * CS;
     const nearTrk = trk < 130;
-    const spawn = (lambda, f) => {
+    // maxSlope (rise over run): trees don't grow out of cliff faces
+    const spawn = (lambda, f, maxSlope = 1.4) => {
       let n = Math.floor(lambda * area + rnd());
       while (n-- > 0) {
         const x = cx + (rnd() - 0.5) * CS, z = cz + (rnd() - 0.5) * CS;
         nTry++;
-        f(x, z, world.heightAt(x, z));
+        world.normalAt(x, z, Nrm);
+        if (Nrm.y < 1 / Math.sqrt(1 + maxSlope * maxSlope)) continue;
+        f(x, z, groundAt(x, z));
       }
     };
     const okWater = (x, z, m) => riv > 30 || F.waterAt(x, z) > m;
@@ -634,14 +704,14 @@ export async function buildVegetation(ctx) {
       const s = H / palms[kk].H;
       kPalm[kk].add(x, gy - 0.15, z, yaw, s, exposure(x, z, gy, cst), tint([1, 1, 1], [1.05, 1.0, 0.85], rnd()));
       collide(x, gy, z, palms[kk].trunkR * s, yaw, 4);
-    });
+    }, 0.7);
     // naupaka on the dunes and the beach heads
     const dune = (1 - ss(45, 90, cst)) * ss(3, 8, cst) * (1 - ss(14, 25, hc)) * (nearTrk ? 1 : 0.25);
     if (dune > 0) spawn(dune / 22 * P.small, (x, z, gy) => {
       if (gy < 0.9 || !okWater(x, z, 2)) return;
       if (!clear(F.trackAt(x, z), 'bush') || kept(x, z)) return;
       kNaupaka[Math.floor(rnd() * kNaupaka.length)].add(x, gy - 0.15, z, rnd() * 6.28, 1.1 + rnd() * 1.1, exposure(x, z, gy, cst), tint([1, 1, 1], [1.1, 1.05, 0.85], rnd()));
-    });
+    }, 0.9);
     // rainforest canopy: big trees where it's lush, scattered smaller ones on the grassland
     const far = trk > 500 ? 0.55 : 1;
     const tp = (forest / 42 + ss(0.15, 0.4, v) * (1 - forest) / 700) * P.trees * far;
@@ -655,12 +725,14 @@ export async function buildVegetation(ctx) {
       if (big) { const arr = pale ? kPale : kTree; k = arr[Math.floor(rnd() * arr.length)]; m = k.model; } else { k = kSmall[pale ? 1 : 0]; m = k.model; }
       const H = big ? (11 + rnd() * 17) * (0.8 + 0.2 * forest) : 6 + rnd() * 7;
       const s = H / m.H;
+      // low spreading crowns stay off the road; tall canopies may arch over it
+      if (!big && q.t >= 0 && q.edge < 7.5 * s + 1) return;
       const yaw = rnd() * 6.28;
-      k.add(x, gy - 0.3, z, yaw, s, (big ? 0.85 : 1.1) * exposure(x, z, gy, cst), tint([1, 1, 1], pale ? [1.08, 1.05, 0.95] : [0.8, 0.92, 0.78], rnd()));
+      k.add(x, gy - 0.3 - (1 - Nrm.y) * 4, z, yaw, s, (big ? 0.85 : 1.1) * exposure(x, z, gy, cst), tint([1, 1, 1], pale ? [1.08, 1.05, 0.95] : [0.8, 0.92, 0.78], rnd()));
       collide(x, gy, z, m.trunkR * s, yaw);
-    });
+    }, 1.2);
     // hapu'u tree ferns under the canopy, thickest along the streams
-    const fp = forest * (1 + 1.5 * (1 - ss(40, 200, riv))) / 110 * P.trees * (trk < 600 ? 1 : 0.3);
+    const fp = forest * (1 + 1.5 * (1 - ss(40, 200, riv))) / 110 * P.trees * (1 - ss(150, 260, trk));
     if (fp > 0) spawn(fp, (x, z, gy) => {
       if (!okWater(x, z, 2) || kept(x, z)) return;
       const q = F.trackAt(x, z);
@@ -668,21 +740,21 @@ export async function buildVegetation(ctx) {
       const k = pick(kFern), s = 0.7 + rnd() * 0.6;
       k.add(x, gy - 0.2, z, rnd() * 6.28, s, 1, tint([1, 1, 1], [0.85, 1, 0.8], rnd()));
       collide(x, gy, z, 0.22 * s, 0, 4);
-    });
+    }, 1.0);
     // bananas and bamboo down on the valley floor by the water
-    const valley = (1 - ss(15, 110, riv)) * ss(10, 30, cst) * ss(0.2, 0.5, v);
+    const valley = (1 - ss(15, 110, riv)) * ss(10, 30, cst) * ss(0.2, 0.5, v) * (1 - ss(300, 450, trk));
     if (valley > 0) {
       spawn(valley / 260 * P.trees, (x, z, gy) => {
         if (!okWater(x, z, 3) || kept(x, z) || !clear(F.trackAt(x, z), 'bush')) return;
         pick(kBanana).add(x, gy - 0.1, z, rnd() * 6.28, 0.8 + rnd() * 0.5, 1.1, tint([1, 1, 1], [1.1, 1.05, 0.8], rnd()));
-      });
+      }, 0.9);
       spawn(valley * clump / 1400 * P.trees, (x, z, gy) => {
         if (!okWater(x, z, 5) || kept(x, z)) return;
         const q = F.trackAt(x, z);
         if (q.edge < 5.5) return;
         const k = pick(kBamboo);
         k.add(x, gy - 0.2, z, rnd() * 6.28, 0.85 + rnd() * 0.3, 1, tint([1, 1, 1], [1.1, 1.08, 0.8], rnd()));
-      });
+      }, 0.8);
     }
     // bananas in the yards of the fishing village
     // understorey along the tracks: ferns, monstera, ti and red ginger; a dense green wall beside the jungle trail
@@ -700,7 +772,7 @@ export async function buildVegetation(ctx) {
         else if (r < 0.62) kMonstera[0].add(x, gy - 0.05, z, rnd() * 6.28, 0.7 + rnd() * 0.6, ex, col);
         else if (r < 0.82) kTi[0].add(x, gy - 0.05, z, rnd() * 6.28, 0.7 + rnd() * 0.6, ex, tint([1, 1, 1], [1.25, 0.7, 0.75], rnd() ** 2));
         else kGinger[0].add(x, gy - 0.05, z, rnd() * 6.28, 0.7 + rnd() * 0.5, ex, col);
-      });
+      }, 1.1);
     }
     // grass on the open ground near the tracks: headlands, cliff tops, road verges; little on fresh lava or sand
     if (trk < 110) {
@@ -722,20 +794,25 @@ export async function buildVegetation(ctx) {
   }
   const counts = Object.fromEntries(kinds.map((k) => [k.name, k.list.length]));
   const total = kinds.reduce((s, k) => s + k.list.length, 0);
-  console.info(`kaiele vegetation: ${total} plants (${nTry} tried) in ${Math.round(performance.now() - t0)} ms`, JSON.stringify(counts), `${colliders.length} trunk colliders`);
+  console.info(`kaiele vegetation: ${total} plants (${nTry} tried) in ${Math.round(performance.now() - t0)} ms (fields, models, impostors ${fieldMs} ms)`, JSON.stringify(counts), `${colliders.length} trunk colliders`);
 
   const lod = new LodSet(kinds, impTypes, P, group);
   const cam = ctx.camera?.position || new THREE.Vector3();
   lod.update(cam, true);
   const life = await buildLife(ctx, { F, tunnelRows, palms: kPalm, trees: [...kTree, ...kTunnel] });
   const sv = new THREE.Vector3();
+  // ?vegstats: draw stats for profiling (instances drawn per kind, LOD update time)
+  const stats = new URLSearchParams(location.search).has('vegstats') ? (window.__veg = { renderer, lod, ms: 0, counts }) : null;
   return {
     colliders,
     group,
     update(t, dt, camera, race) {
       wind.uTime.value = t;
       if (camera) {
+        if (stats) { renderer.info.autoReset = false; renderer.info.reset(); }
+        const t1 = stats && performance.now();
         lod.update(camera.position);
+        if (stats) stats.ms = Math.max(stats.ms, performance.now() - t1);
         sv.copy(ctx.sun || up).normalize().transformDirection(camera.matrixWorldInverse);
         sunView.value.copy(sv);
       }

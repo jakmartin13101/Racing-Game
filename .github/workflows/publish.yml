@@ -1,0 +1,76 @@
+# Publishes Gravel Riot so anyone can play it without an account:
+# - the browser build goes to the gh-pages branch, served at https://jakmartin13101.github.io/Racing-Game/
+# - the Windows installer is attached to the "latest" GitHub Release
+name: Publish Gravel Riot
+
+on:
+  push:
+    branches: [main, claude/project-thread-yj1rdi]
+    paths: ['game/**', '.github/workflows/publish.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: publish
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    working-directory: game
+
+jobs:
+  web:
+    name: Browser build to GitHub Pages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: game/package-lock.json
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - run: npm run build
+      - uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: game/dist
+          publish_branch: gh-pages
+          force_orphan: true
+
+  windows:
+    name: Windows installer to GitHub Releases
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: game/package-lock.json
+      - run: sudo apt-get update && sudo apt-get install -y nsis
+      - run: npm ci
+      - run: npm run build
+      - run: npx electron-builder --win dir --x64 --publish never
+      - run: makensis -DSRC=../release/win-unpacked -DOUT=../release/GravelRiot-Setup.exe electron/installer.nsi
+      - name: Move the "latest" tag to this commit
+        run: |
+          git tag -f latest
+          git push -f origin refs/tags/latest
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Gravel Riot for Windows
+          make_latest: true
+          files: game/release/GravelRiot-Setup.exe
+          body: |
+            **Download `GravelRiot-Setup.exe` below**, run it, and Gravel Riot appears on your desktop and Start menu.
+            Windows may show a SmartScreen warning because the installer isn't code-signed: click **More info**, then **Run anyway**.
+
+            Or play in your browser, nothing to install: https://jakmartin13101.github.io/Racing-Game/
+
+            Built from ${{ github.sha }}.

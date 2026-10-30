@@ -1,0 +1,55 @@
+{
+ "id": "jeep_bayou",
+ "name": "Bayou Bruiser",
+ "class": "jeep",
+ "number": 33,
+ "model": "models/vehicles/jeep_bayou.glb",
+ "textures": "models/vehicles/jeep_bayou/",
+ "wheels": {
+  "wheel_FL": {
+   "pos": [
+    0.84,
+    -1.16,
+    -0.616
+   ],
+   "radius": 0.48
+  },
+  "wheel_FR": {
+   "pos": [
+    -0.84,
+    -1.16,
+    -0.616
+   ],
+   "radius": 0.48
+  },
+  "wheel_RL": {
+   "pos": [
+    0.84,
+    1.26,
+    -0.616
+   ],
+   "radius": 0.48
+  },
+  "wheel_RR": {
+   "pos": [
+    -0.84,
+    1.26,
+    -0.616
+   ],
+   "radius": 0.48
+  }
+ },
+ "steer": null,
+ "origin_height": 1.096,
+ "length": 4.34,
+ "width": 2.14,
+ "height": 2.416,
+ "tris": 115538,
+ "tune": {
+  "mass": 1850,
+  "power": 0.75,
+  "grip": 1.1,
+  "top": 118
+ },
+ "blurb": "Mud jeep with a snorkel and winch"
+}

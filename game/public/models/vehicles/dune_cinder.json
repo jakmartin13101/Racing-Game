@@ -1,0 +1,55 @@
+{
+ "id": "dune_cinder",
+ "name": "Cinder",
+ "class": "dune",
+ "number": 13,
+ "model": "models/vehicles/dune_cinder.glb",
+ "textures": "models/vehicles/dune_cinder/",
+ "wheels": {
+  "wheel_FL": {
+   "pos": [
+    0.75,
+    -1.03,
+    -0.37
+   ],
+   "radius": 0.33
+  },
+  "wheel_FR": {
+   "pos": [
+    -0.75,
+    -1.03,
+    -0.37
+   ],
+   "radius": 0.33
+  },
+  "wheel_RL": {
+   "pos": [
+    0.82,
+    1.03,
+    -0.3
+   ],
+   "radius": 0.4
+  },
+  "wheel_RR": {
+   "pos": [
+    -0.82,
+    1.03,
+    -0.3
+   ],
+   "radius": 0.4
+  }
+ },
+ "steer": null,
+ "origin_height": 0.7,
+ "length": 3.26,
+ "width": 2.1,
+ "height": 1.72,
+ "tris": 114512,
+ "tune": {
+  "mass": 720,
+  "power": 0.75,
+  "grip": 1.0,
+  "top": 135
+ },
+ "blurb": "Black buggy with fat rear tyres and a stinger exhaust"
+}

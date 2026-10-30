@@ -1,0 +1,50 @@
+{
+ "id": "bike_ashrunner",
+ "name": "Ashrunner",
+ "class": "bike",
+ "number": 88,
+ "model": "models/vehicles/bike_ashrunner.glb",
+ "textures": "models/vehicles/bike_ashrunner/",
+ "wheels": {
+  "wheel_F": {
+   "pos": [
+    -0.0,
+    -0.74,
+    -0.24
+   ],
+   "radius": 0.36
+  },
+  "wheel_R": {
+   "pos": [
+    0.0,
+    0.74,
+    -0.25
+   ],
+   "radius": 0.35
+  }
+ },
+ "steer": {
+  "pivot": [
+   -0.0,
+   -0.3839,
+   0.4
+  ],
+  "axis": [
+   -0.0,
+   0.291,
+   0.454
+  ]
+ },
+ "origin_height": 0.6,
+ "length": 2.29,
+ "width": 0.84,
+ "height": 1.25,
+ "tris": 78246,
+ "tune": {
+  "mass": 115,
+  "power": 0.55,
+  "grip": 1.02,
+  "top": 126
+ },
+ "blurb": "Enduro bike with a headlamp, built for night stages"
+}

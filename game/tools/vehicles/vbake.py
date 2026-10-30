@@ -213,14 +213,14 @@ def make_builders(spec, meta):
 
     def mat_paint(m):
         g = NB(m)
-        w = W(g, dust=0.75, mud=0.85, wear=0.5, rust=0.12)
+        w = W(g, dust=0.55, mud=0.8, wear=0.5, rust=0.12)
         base = livery_base(g, w, spec, meta)
         w.finish(base, g.mixf(w.n2, 0.26, 0.4), 0.0, coat=1.0, bare=(0.3, 0.3, 0.31))
         return g
 
     def mat_plastic2(m):
         g = NB(m)
-        w = W(g, dust=0.8, mud=0.95, wear=0.35, rust=0.0)
+        w = W(g, dust=0.5, mud=0.85, wear=0.35, rust=0.0)
         base = livery_base(g, w, spec, meta, plastic=True)
         # moulded plastic: scuffs go whitish, not to metal
         w.finish(base, g.mixf(w.n2, 0.36, 0.5), 0.0, coat=0.35, bare=g.hsv(base, 0.5, 0.4, 1.6))
@@ -278,7 +278,9 @@ def make_builders(spec, meta):
         'rubber': mat_simple((0.02, 0.02, 0.02), 0.9, 0.0, dust=0.9, mud=0.9, wear=0.0, rust=0.0),
         'seat': mat_simple(spec.get('seat', (0.03, 0.03, 0.035)), 0.85, 0.0, dust=0.35, mud=0.1, wear=0.15, rust=0.0, bare=(0.08, 0.08, 0.08)),
         'canvas': mat_simple(spec.get('canvas', (0.05, 0.05, 0.045)), 0.95, 0.0, dust=0.8, mud=0.3, wear=0.0, rust=0.0),
-        'flag': mat_simple(spec.get('flag', (0.9, 0.3, 0.01)), 0.8, 0.0, dust=0.3, mud=0.0, wear=0.0, rust=0.0),
+        'flag': mat_simple(spec.get('flag_col', (0.9, 0.3, 0.01)), 0.8, 0.0, dust=0.3, mud=0.0, wear=0.0, rust=0.0),
+        'tank': mat_simple(spec.get('tank_col', (0.55, 0.04, 0.02)), 0.4, 0.0, dust=0.7, mud=0.4, wear=0.35, rust=0.0, coat=0.4,
+                           bare=(0.3, 0.3, 0.31)),
         'tyre': mat_tyre,
         'wheelrim': mat_rim,
     }
@@ -297,6 +299,9 @@ def join(objs, name):
         kit.apply_all(o)
         if not o.data.materials:
             o.data.materials.append(kit.MATS['chassis'])
+        for i, m in enumerate(o.data.materials):
+            if m is None:   # empty slots left behind by boolean cutters
+                o.data.materials[i] = o.data.materials[0] or kit.MATS['chassis']
     select_only(objs)
     bpy.ops.object.join()
     ob = bpy.context.view_layer.objects.active

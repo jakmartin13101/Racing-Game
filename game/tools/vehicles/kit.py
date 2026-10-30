@@ -54,6 +54,7 @@ def init_mats():
     pmat('seat', (0.03, 0.03, 0.032), 0.7)
     pmat('canvas', (0.12, 0.11, 0.09), 0.9)       # soft tops, nets
     pmat('flag', (0.95, 0.4, 0.02), 0.7)
+    pmat('tank', (0.6, 0.05, 0.02), 0.4)        # fuel cells / jugs
     pmat('engine', (0.12, 0.12, 0.125), 0.45, 0.8)
     pmat('rim', (0.42, 0.42, 0.44), 0.3, 1.0)
     # separate objects (not baked into the atlas)

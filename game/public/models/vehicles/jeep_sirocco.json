@@ -1,0 +1,55 @@
+{
+ "id": "jeep_sirocco",
+ "name": "Sirocco",
+ "class": "jeep",
+ "number": 210,
+ "model": "models/vehicles/jeep_sirocco.glb",
+ "textures": "models/vehicles/jeep_sirocco/",
+ "wheels": {
+  "wheel_FL": {
+   "pos": [
+    0.8,
+    -1.16,
+    -0.558
+   ],
+   "radius": 0.45
+  },
+  "wheel_FR": {
+   "pos": [
+    -0.8,
+    -1.16,
+    -0.558
+   ],
+   "radius": 0.45
+  },
+  "wheel_RL": {
+   "pos": [
+    0.8,
+    1.26,
+    -0.558
+   ],
+   "radius": 0.45
+  },
+  "wheel_RR": {
+   "pos": [
+    -0.8,
+    1.26,
+    -0.558
+   ],
+   "radius": 0.45
+  }
+ },
+ "steer": null,
+ "origin_height": 1.008,
+ "length": 4.34,
+ "width": 2.04,
+ "height": 2.328,
+ "tris": 120146,
+ "tune": {
+  "mass": 1750,
+  "power": 0.76,
+  "grip": 1.0,
+  "top": 138
+ },
+ "blurb": "Raid jeep with a roof rack, jerry cans and a snorkel"
+}

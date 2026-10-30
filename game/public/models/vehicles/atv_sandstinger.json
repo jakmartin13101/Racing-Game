@@ -1,0 +1,66 @@
+{
+ "id": "atv_sandstinger",
+ "name": "Sandstinger",
+ "class": "atv",
+ "number": 7,
+ "model": "models/vehicles/atv_sandstinger.glb",
+ "textures": "models/vehicles/atv_sandstinger/",
+ "wheels": {
+  "wheel_FL": {
+   "pos": [
+    0.62,
+    -0.665,
+    -0.28
+   ],
+   "radius": 0.27
+  },
+  "wheel_FR": {
+   "pos": [
+    -0.62,
+    -0.665,
+    -0.28
+   ],
+   "radius": 0.27
+  },
+  "wheel_RL": {
+   "pos": [
+    0.6,
+    0.665,
+    -0.25
+   ],
+   "radius": 0.3
+  },
+  "wheel_RR": {
+   "pos": [
+    -0.6,
+    0.665,
+    -0.25
+   ],
+   "radius": 0.3
+  }
+ },
+ "steer": {
+  "pivot": [
+   -0.0,
+   -0.545,
+   0.29
+  ],
+  "axis": [
+   -0.0,
+   0.3939,
+   0.3304
+  ]
+ },
+ "origin_height": 0.55,
+ "length": 2.53,
+ "width": 1.52,
+ "height": 1.11,
+ "tris": 96071,
+ "tune": {
+  "mass": 200,
+  "power": 0.62,
+  "grip": 0.95,
+  "top": 124
+ },
+ "blurb": "Long-arm dune quad on paddles"
+}

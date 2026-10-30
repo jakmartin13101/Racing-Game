@@ -187,6 +187,51 @@ def build(spec):
             transform(bm, rot=[('Y', 1.5708)], loc=(0, YR - 0.15, 1.26 + WR * 0.5 + 0.02))
         P.add('spare_t', t, 'rubber')
         P.add('spare_r', r, 'metal', 0.003)
+    if spec.get('spare_slope'):
+        # spare laid flat on the sloping rear cage tubes behind the seat, axis normal to the slope
+        a = Vector((HW - 0.02, YM, ZRF - 0.02))
+        b = Vector((0.5, YR + 0.05, 1.12))
+        d = (b - a); d.x = 0; d.normalize()
+        nrm = Vector((0, -d.z, d.y)) if d.y < 0 else Vector((0, d.z, -d.y))
+        if nrm.z < 0:
+            nrm = -nrm
+        c = a.lerp(b, 0.55); c.x = 0
+        c += nrm * (WR * 0.5 + T + 0.01)
+        t = kit.tyre(RR, WR, RRIM, ts_r)
+        r = kit.rim(RR, WR, RRIM, rs)
+        tilt = math.atan2(-nrm.y, nrm.z)
+        for bm in (t, r):
+            transform(bm, rot=[('Y', -math.pi / 2), ('X', tilt)], loc=c)
+        P.add('spare_t', t, 'rubber')
+        P.add('spare_r', r, 'metal', 0.003)
+        # mounting posts and a ratchet strap across the tyre
+        base = c - nrm * (WR * 0.5 + 0.01)
+        P.add('spare_mount', merge([tube_path([base + Vector((sx * 0.12, 0, 0)), base + Vector((sx * 0.12, 0, 0)) - nrm * 0.06], 0.012, 6)
+                                    for sx in (1, -1)] + [tube_path([base + nrm * 0.03, c + nrm * (WR * 0.5 + 0.02)], 0.03, 10)]), 'chassis')
+        strap = [c + Vector((x, 0, 0)) + nrm * (WR * 0.5 + 0.008) for x in (-RR * 0.95, RR * 0.95)]
+        P.add('spare_strap', tube_path([strap[0] - nrm * WR, strap[0], strap[1], strap[1] - nrm * WR], 0.008, 6, 0.02), 'seat')
+    if spec.get('roof_tanks'):
+        # two fuel cells strapped across the roof tubes
+        rt = 0.12
+        yc = (YA - 0.42 + YM) / 2
+        for x in (-0.17, 0.17) if HW < 0.5 else (-0.25, 0.25):
+            P.add('fuel_tank', lathe([(0.0, -0.22), (rt * 0.7, -0.22), (rt, -0.18), (rt, 0.18), (rt * 0.7, 0.22), (0.0, 0.22)], 24, axis='Y'),
+                  'tank', 0.004)
+            P.body[-1].location = (x, yc, ZRF + T + rt)
+            kit.apply_all(P.body[-1])
+            import bpy
+            ob = P.body[-1]
+            bpy.context.view_layer.objects.active = ob
+            for o in bpy.context.selected_objects:
+                o.select_set(False)
+            ob.select_set(True)
+            bpy.ops.object.transform_apply(location=True, rotation=False, scale=False)
+            P.add('fuel_cap', cyl(0.03, 0.03, 12, loc=(x, yc + 0.12, ZRF + T + rt * 2 + 0.005)), 'alloy', 0.003)
+            for dy in (-0.12, 0.12):
+                ring = [(x + rt * 1.03 * math.cos(q), yc + dy, ZRF + T + rt + rt * 1.03 * math.sin(q)) for q in
+                        [math.radians(d) for d in range(0, 181, 15)]]
+                P.add('tank_strap', tube_path([(x + rt * 1.03, yc + dy, ZRF - 0.01)] + ring + [(x - rt * 1.03, yc + dy, ZRF - 0.01)], 0.007, 6),
+                      'seat')
     if spec.get('flag', True):
         P.add('whip', tube_path([(-0.48, YR - 0.4, 0.8), (-0.5, YR - 0.45, 2.6)], 0.006, 6), 'chassis')
         fl = bmesh.new()

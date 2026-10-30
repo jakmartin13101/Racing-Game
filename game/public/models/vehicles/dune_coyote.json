@@ -1,0 +1,55 @@
+{
+ "id": "dune_coyote",
+ "name": "Coyote",
+ "class": "dune",
+ "number": 31,
+ "model": "models/vehicles/dune_coyote.glb",
+ "textures": "models/vehicles/dune_coyote/",
+ "wheels": {
+  "wheel_FL": {
+   "pos": [
+    0.81,
+    -1.03,
+    -0.45
+   ],
+   "radius": 0.37
+  },
+  "wheel_FR": {
+   "pos": [
+    -0.81,
+    -1.03,
+    -0.45
+   ],
+   "radius": 0.37
+  },
+  "wheel_RL": {
+   "pos": [
+    0.83,
+    1.03,
+    -0.42
+   ],
+   "radius": 0.4
+  },
+  "wheel_RR": {
+   "pos": [
+    -0.83,
+    1.03,
+    -0.42
+   ],
+   "radius": 0.4
+  }
+ },
+ "steer": null,
+ "origin_height": 0.82,
+ "length": 3.26,
+ "width": 2.06,
+ "height": 1.84,
+ "tris": 117100,
+ "tune": {
+  "mass": 780,
+  "power": 0.72,
+  "grip": 1.02,
+  "top": 138
+ },
+ "blurb": "Lifted long-travel buggy with a full cage"
+}

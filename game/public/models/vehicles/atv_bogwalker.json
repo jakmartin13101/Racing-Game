@@ -1,0 +1,66 @@
+{
+ "id": "atv_bogwalker",
+ "name": "Bogwalker",
+ "class": "atv",
+ "number": 66,
+ "model": "models/vehicles/atv_bogwalker.glb",
+ "textures": "models/vehicles/atv_bogwalker/",
+ "wheels": {
+  "wheel_FL": {
+   "pos": [
+    0.61,
+    -0.635,
+    -0.36
+   ],
+   "radius": 0.33
+  },
+  "wheel_FR": {
+   "pos": [
+    -0.61,
+    -0.635,
+    -0.36
+   ],
+   "radius": 0.33
+  },
+  "wheel_RL": {
+   "pos": [
+    0.59,
+    0.635,
+    -0.35
+   ],
+   "radius": 0.34
+  },
+  "wheel_RR": {
+   "pos": [
+    -0.59,
+    0.635,
+    -0.35
+   ],
+   "radius": 0.34
+  }
+ },
+ "steer": {
+  "pivot": [
+   -0.0,
+   -0.515,
+   0.29
+  ],
+  "axis": [
+   -0.0,
+   0.2539,
+   0.3304
+  ]
+ },
+ "origin_height": 0.69,
+ "length": 2.47,
+ "width": 1.48,
+ "height": 1.25,
+ "tris": 91656,
+ "tune": {
+  "mass": 320,
+  "power": 0.6,
+  "grip": 1.1,
+  "top": 92
+ },
+ "blurb": "Lifted mud quad with snorkels"
+}

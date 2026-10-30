@@ -1,0 +1,55 @@
+{
+ "id": "sxs_swampthing",
+ "name": "Swamp Thing",
+ "class": "sxs",
+ "number": 76,
+ "model": "models/vehicles/sxs_swampthing.glb",
+ "textures": "models/vehicles/sxs_swampthing/",
+ "wheels": {
+  "wheel_FL": {
+   "pos": [
+    0.82,
+    -1.18,
+    -0.437
+   ],
+   "radius": 0.44
+  },
+  "wheel_FR": {
+   "pos": [
+    -0.82,
+    -1.18,
+    -0.437
+   ],
+   "radius": 0.44
+  },
+  "wheel_RL": {
+   "pos": [
+    0.82,
+    1.18,
+    -0.437
+   ],
+   "radius": 0.44
+  },
+  "wheel_RR": {
+   "pos": [
+    -0.82,
+    1.18,
+    -0.437
+   ],
+   "radius": 0.44
+  }
+ },
+ "steer": null,
+ "origin_height": 0.877,
+ "length": 3.91,
+ "width": 2.02,
+ "height": 2.228,
+ "tris": 113936,
+ "tune": {
+  "mass": 880,
+  "power": 0.8,
+  "grip": 1.1,
+  "top": 118
+ },
+ "blurb": "Lifted mud UTV with snorkels"
+}

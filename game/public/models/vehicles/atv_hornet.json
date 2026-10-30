@@ -1,0 +1,66 @@
+{
+ "id": "atv_hornet",
+ "name": "Hornet",
+ "class": "atv",
+ "number": 14,
+ "model": "models/vehicles/atv_hornet.glb",
+ "textures": "models/vehicles/atv_hornet/",
+ "wheels": {
+  "wheel_FL": {
+   "pos": [
+    0.58,
+    -0.635,
+    -0.265
+   ],
+   "radius": 0.285
+  },
+  "wheel_FR": {
+   "pos": [
+    -0.58,
+    -0.635,
+    -0.265
+   ],
+   "radius": 0.285
+  },
+  "wheel_RL": {
+   "pos": [
+    0.56,
+    0.635,
+    -0.26
+   ],
+   "radius": 0.29
+  },
+  "wheel_RR": {
+   "pos": [
+    -0.56,
+    0.635,
+    -0.26
+   ],
+   "radius": 0.29
+  }
+ },
+ "steer": {
+  "pivot": [
+   -0.0,
+   -0.515,
+   0.29
+  ],
+  "axis": [
+   -0.0,
+   0.3939,
+   0.3304
+  ]
+ },
+ "origin_height": 0.55,
+ "length": 2.47,
+ "width": 1.41,
+ "height": 1.11,
+ "tris": 90040,
+ "tune": {
+  "mass": 190,
+  "power": 0.55,
+  "grip": 1.05,
+  "top": 118
+ },
+ "blurb": "Sport race quad, light and twitchy"
+}

@@ -1,0 +1,50 @@
+{
+ "id": "bike_nomad",
+ "name": "Nomad",
+ "class": "bike",
+ "number": 101,
+ "model": "models/vehicles/bike_nomad.glb",
+ "textures": "models/vehicles/bike_nomad/",
+ "wheels": {
+  "wheel_F": {
+   "pos": [
+    -0.0,
+    -0.77,
+    -0.24
+   ],
+   "radius": 0.36
+  },
+  "wheel_R": {
+   "pos": [
+    0.0,
+    0.77,
+    -0.25
+   ],
+   "radius": 0.35
+  }
+ },
+ "steer": {
+  "pivot": [
+   -0.0,
+   -0.3833,
+   0.46
+  ],
+  "axis": [
+   -0.0,
+   0.291,
+   0.454
+  ]
+ },
+ "origin_height": 0.6,
+ "length": 2.35,
+ "width": 0.84,
+ "height": 1.31,
+ "tris": 79237,
+ "tune": {
+  "mass": 150,
+  "power": 0.62,
+  "grip": 0.98,
+  "top": 150
+ },
+ "blurb": "Rally-raid bike with a nav tower and long-range tanks"
+}

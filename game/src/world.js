@@ -213,6 +213,22 @@ vec3 albedo = mix(groundA, bA, wRock);
 albedo = mix(albedo, lA, wBurn * (1.0 - wRoad));
 // macro tonal variation so the slopes don't read flat at distance
 albedo *= mix(0.75, 1.15, nz.g) * mix(0.88, 1.08, nz2.r);
+// erosion: rain and ash slides cut gullies straight down the slopes; sample the noise stretched along the fall line
+vec2 fall = normalize(Ng.xz + vec2(1e-4));
+vec2 gq = vec2(dot(vW.xz, vec2(-fall.y, fall.x)) / 16.0, dot(vW.xz, fall) / 120.0);
+// (the noise is low-contrast, so stretch it out to the full range)
+float gully = clamp((texture(tNoise, gq).r * 0.6 + texture(tNoise, gq * vec2(3.1, 2.0)).g * 0.4 - 0.52) * 3.5 + 0.5, 0.0, 1.0);
+float gK = smoothstep(0.06, 0.3, slope) * (1.0 - wRoad);
+albedo *= mix(1.0, mix(0.55, 1.45, smoothstep(0.3, 0.75, gully)), gK);
+// paler ash washed down the gully floors on the upper cone
+albedo = mix(albedo, vec3(0.34, 0.31, 0.29) * (0.8 + nz2.g * 0.4), smoothstep(0.62, 0.8, gully) * gK * hAsh * 0.55);
+// mid-range breakup (20-150 m), where the ground textures have blurred out but the macro noise is too broad
+vec3 nzm = texture(tNoise, vW.xz / 7.0).rgb;
+float midK = smoothstep(12.0, 40.0, camD) * (1.0 - smoothstep(150.0, 400.0, camD));
+albedo *= mix(1.0, mix(0.8, 1.12, nzm.r) * mix(0.92, 1.05, nzm.b), midK);
+// near: loose stones and grit speckle the ground
+float grit = texture(tNoise, vW.xz / 0.55).g;
+albedo *= mix(1.0, mix(0.72, 1.2, smoothstep(0.35, 0.8, grit)), (1.0 - smoothstep(6.0, 30.0, camD)) * 0.6);
 
 vec3 topN = groundN;
 topN = normalize(mix(topN, lN, wBurn * (1.0 - wRoad)));
@@ -221,6 +237,8 @@ vec3 dN = unpackN(texture(tDetail, vW.xz / 1.3));
 topN = normalize(topN + vec3(dN.xy, 0.0) * 0.35 * (1.0 - smoothstep(10.0, 40.0, camD)));
 vec3 wN = topToWorld(topN, Ng);
 wN = normalize(mix(wN, rockN, wRock));
+float gd = (texture(tNoise, gq + vec2(0.01, 0.0)).r - texture(tNoise, gq - vec2(0.01, 0.0)).r) * 3.0;
+wN = normalize(wN + vec3(-fall.y, 0.0, fall.x) * gd * 3.0 * gK);
 gN = wN;
 vec2 ro = mix(groundRO, bO, wRock);
 gAO = ro.r;
@@ -285,12 +303,21 @@ export function buildTrackRibbon(world, M, track) {
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   geo.setIndex(idx);
   geo.computeVertexNormals();
+  const mat = roadMaterial(M, W, closed ? 1e9 : s);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.receiveShadow = true;
+  mesh.renderOrder = 1;
+  return mesh;
+}
+
+// the gravel road surface, on a strip with uv = (metres along, metres across); also laid on bridge decks
+export function roadMaterial(M, W, len) {
   const mat = new THREE.MeshStandardMaterial({
     side: THREE.DoubleSide, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
   });
   const uniforms = {
     ashA: { value: M.ash.a }, ashP: { value: M.ash.p }, tNoise: { value: M.noise },
-    tDetail: { value: M.detail }, uHalfW: { value: W / 2 }, uLen: { value: closed ? 1e9 : s },
+    tDetail: { value: M.detail }, uHalfW: { value: W / 2 }, uLen: { value: len },
   };
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, uniforms);
@@ -333,10 +360,20 @@ col *= mix(1.0, 0.85 + 0.3 * stri, clamp(rut, 0.0, 1.0));
 float edge = smoothstep(uHalfW - 1.0, uHalfW + 2.5, abs(lat));
 col = mix(col, col * vec3(1.12, 1.05, 1.0), edge * 0.6);
 tn = normalize(mix(tn, vec3(0, 0, 1), rut * 0.55));
+// potholes: shallow dished hollows, darker and wetter-looking, worn between the ruts
+float ph = texture(tNoise, vec2(along / 9.0, lat / 9.0 + 0.6)).b;
+float pot = smoothstep(0.7, 0.8, ph) * (1.0 - clamp(rut, 0.0, 1.0) * 0.7) * (1.0 - smoothstep(uHalfW - 1.5, uHalfW, abs(lat)));
+col *= 1.0 - pot * 0.35;
+vec2 pg = vec2(texture(tNoise, vec2((along + 0.3) / 9.0, lat / 9.0 + 0.6)).b - ph, texture(tNoise, vec2(along / 9.0, (lat + 0.3) / 9.0 + 0.6)).b - ph);
+tn = normalize(tn + vec3(pg * 6.0 * smoothstep(0.65, 0.8, ph), 0.0));
+// loose stones thrown to the edges and the crown between the wheel tracks
+float st = texture(tNoise, vW.xz / 0.7).r;
+float stones = smoothstep(0.72, 0.8, st) * (0.35 + 0.65 * (1.0 - clamp(rut, 0.0, 1.0)));
+col = mix(col, col * vec3(1.35, 1.3, 1.22), stones * 0.6);
 tn.x += rutD * 0.03 * 0.0; // keep rut normals subtle
 vec3 dN = unpackN(texture(tDetail, vW.xz / 1.1));
 tn = normalize(tn + vec3(dN.xy, 0.0) * 0.25);
-rN = tn; rAO = P.b; rR = mix(A.a, 0.62, rut * 0.6);
+rN = tn; rAO = P.b * (1.0 - pot * 0.25); rR = mix(mix(A.a, 0.62, rut * 0.6), 0.5, pot * 0.5);
 diffuseColor.rgb = col;
 float fade = 1.0 - smoothstep(uHalfW + 0.5, uHalfW * 1.55, abs(lat) + (nzf.b - 0.5) * 5.0);
 diffuseColor.a = fade * smoothstep(0.0, 10.0, along) * smoothstep(uLen, uLen - 10.0, along);
@@ -357,10 +394,7 @@ normal = normalize((viewMatrix * vec4(wn, 0.0)).xyz);`)
       .replace('#include <aomap_fragment>', `
 reflectedLight.indirectDiffuse *= rAO;`);
   };
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.receiveShadow = true;
-  mesh.renderOrder = 1;
-  return mesh;
+  return mat;
 }
 
 // ---------------------------------------------------------------- lava
@@ -375,11 +409,11 @@ export function buildLava(world, M) {
     mat.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, lavaUniforms);
       sh.vertexShader = sh.vertexShader
-        .replace('#include <common>', '#include <common>\nvarying vec3 vW; varying vec2 vT;')
-        .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvW = (modelMatrix * vec4(transformed,1.0)).xyz; vT = uv;');
+        .replace('#include <common>', `#include <common>\nvarying vec3 vW; varying vec2 vT;${flowing ? '\nattribute vec2 flow; varying vec2 vF;' : ''}`)
+        .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>\nvW = (modelMatrix * vec4(transformed,1.0)).xyz; vT = uv;${flowing ? ' vF = flow;' : ''}`);
       sh.fragmentShader = sh.fragmentShader
         .replace('#include <common>', `#include <common>
-varying vec3 vW; varying vec2 vT;
+varying vec3 vW; varying vec2 vT;${flowing ? ' varying vec2 vF;' : ''}
 uniform float uTime; uniform sampler2D lavA, lavN, tHeat, tMolten;
 ${GLSL_COMMON}
 vec3 lavaEm; vec3 lavaN;
@@ -389,15 +423,43 @@ vec3 blackbody(float t) {
        + vec3(0.0, 0.25, 0.45) * smoothstep(0.8, 1.0, t);
 }`)
         .replace('#include <map_fragment>', /* glsl */`
-${flowing
-    ? 'vec2 uv1 = vec2(vT.x / 14.0 - uTime * 0.05, vT.y / 14.0); vec2 uv2 = vec2(vT.x / 9.0 - uTime * 0.085, vT.y / 9.0 + 0.3);'
-    : 'vec2 uv1 = vW.xz / 18.0 + vec2(uTime * 0.006, 0.0); vec2 uv2 = vW.xz / 11.0 - vec2(0.0, uTime * 0.01);'}
+${flowing ? /* glsl */`
+// a river running down the mountain: it moves fastest down its middle and drags at its banks (vF.x is -1..1
+// across, vF.y the speed in m/s from the slope). Two texture phases, each restarting every few seconds and
+// cross-faded, so the crust keeps sliding downhill without smearing out where the speed changes.
+float a = vF.x, spd = vF.y * (1.0 - 0.7 * a * a);
+float P = 3.2, f0 = fract(uTime / P), f1 = fract(uTime / P + 0.5);
+float wB = abs(1.0 - 2.0 * f0);
+vec2 base = vec2(vT.x, vT.y);
+vec2 uA = base - vec2(spd * f0 * P, 0.0), uB = base - vec2(spd * f1 * P, 0.0) + vec2(5.3, 2.1);
+// stretched along the flow, so the crust reads as streaks being dragged downhill
+vec2 uv1 = uA / vec2(22.0, 11.0), uv2 = uA / vec2(13.0, 8.0) + 0.3, uv1b = uB / vec2(22.0, 11.0), uv2b = uB / vec2(13.0, 8.0) + 0.3;
+vec3 nz = texture(tNoise, vW.xz / 90.0 + uTime * 0.003).rgb;
+float nA = texture(tNoise, uA / 25.0).r, nB = texture(tNoise, uB / 25.0).r;
+float nzbr = mix(nA, nB, wB);
+float hot = max(mix(texture(tHeat, uv1).r, texture(tHeat, uv1b).r, wB), mix(texture(tHeat, uv2 * 1.3).r, texture(tHeat, uv2b * 1.3).r, wB) * 0.8);
+// the crust tears open down the hot middle of the flow and along the shear lines
+float core = 1.0 - smoothstep(0.08, 0.38, abs(a + (nzbr - 0.5) * 0.5));
+float molten = clamp(smoothstep(0.62, 0.76, nz.g * 0.75 + nzbr * 0.4) + core * 0.8, 0.0, 1.0);
+// surges: brighter bands that roll down with the flow
+float surge = 0.5 + 0.5 * sin((vT.x - uTime * spd) * 0.35 + nz.r * 9.0);
+float pulse = 0.8 + 0.3 * surge * core + 0.1 * sin(uTime * 1.3 + nz.r * 12.0);
+vec3 crust = mix(texture(lavA, uv1).rgb, texture(lavA, uv1b).rgb, wB);
+vec3 melt = mix(texture(tMolten, uv2 * 0.6).rgb, texture(tMolten, uv2b * 0.6).rgb, wB);
+diffuseColor.rgb = mix(crust * 0.45, melt * 0.15, molten);
+// the crust between: dark, glowing only along its torn streaks, dimmer towards the banks where it has cooled
+float bank = 1.0 - smoothstep(0.55, 1.0, abs(a));
+lavaEm = (vec3(1.0, 0.3, 0.04) * pow(hot, 1.8) * 3.0 * (0.35 + 0.65 * bank) + melt * vec3(1.2, 0.75, 0.45) * molten * 3.0) * pulse;
+lavaN = unpackN(mix(texture(lavN, uv1), texture(lavN, uv1b), wB));
+lavaN = normalize(mix(lavaN, vec3(0,0,1), molten * 0.7));
+` : /* glsl */`
+vec2 uv1 = vW.xz / 18.0 + vec2(uTime * 0.006, 0.0); vec2 uv2 = vW.xz / 11.0 - vec2(0.0, uTime * 0.01);
 vec3 nz = texture(tNoise, vW.xz / 90.0 + uTime * 0.003).rgb;
 vec3 nzb = texture(tNoise, vW.xz / 25.0 - uTime * 0.004).rgb;
 float e1 = texture(tHeat, uv1).r, e2 = texture(tHeat, uv2 * 1.3).r;
 float hot = max(e1, e2 * 0.8);
-// open molten channels where the crust has broken up
-float molten = smoothstep(0.58, 0.72, nz.g * 0.75 + nzb.r * 0.4 + ${flowing ? '0.05' : '-0.05'});
+// open molten channels where the crust has broken up; slow convection rolls it over
+float molten = smoothstep(0.58, 0.72, nz.g * 0.75 + nzb.r * 0.4 - 0.05);
 float pulse = 0.85 + 0.15 * sin(uTime * 1.3 + nz.r * 12.0);
 vec3 crust = texture(lavA, uv1).rgb;
 vec3 melt = texture(tMolten, uv2 * 0.6).rgb;
@@ -405,16 +467,17 @@ diffuseColor.rgb = mix(crust * 0.6, melt * 0.15, molten);
 lavaEm = (vec3(1.0, 0.32, 0.05) * pow(hot, 1.5) * 2.6 + melt * vec3(1.2, 0.75, 0.45) * molten * 3.2) * pulse;
 lavaN = unpackN(texture(lavN, uv1));
 lavaN = normalize(mix(lavaN, vec3(0,0,1), molten * 0.7));
-`)
+`}`)
         .replace('#include <normal_fragment_maps>', 'normal = normalize((viewMatrix * vec4(topToWorld(lavaN, vec3(0,1,0)), 0.0)).xyz);')
         .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += lavaEm;');
     };
+    mat.customProgramCacheKey = () => `lava-${flowing}`;
     return mat;
   };
   const riverMat = makeMat(true);
   for (const rv of world.data.rivers) {
     const pts = rv.points;
-    const verts = [], uvs = [], idx = [];
+    const verts = [], uvs = [], flow = [], idx = [];
     let s = 0;
     const segs = 8;
     for (let i = 0; i < pts.length; i++) {
@@ -427,6 +490,9 @@ lavaN = normalize(mix(lavaN, vec3(0,0,1), molten * 0.7));
         const a = (j / segs) * 2 - 1;
         verts.push(p[0] + nx * a * w, p[1] - (a * a) * 0.4, p[2] + nz * a * w);
         uvs.push(s, a * w);
+        // runs faster where it is steep
+        const drop = (o[1] - q[1]) / (Math.hypot(q[0] - o[0], q[2] - o[2]) || 1);
+        flow.push(a, THREE.MathUtils.clamp(2.2 + drop * 30, 2.2, 9));
       }
       if (i < pts.length - 1) s += Math.hypot(q[0] - p[0], q[2] - p[2]);
     }
@@ -439,6 +505,7 @@ lavaN = normalize(mix(lavaN, vec3(0,0,1), molten * 0.7));
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setAttribute('flow', new THREE.Float32BufferAttribute(flow, 2));
     geo.setIndex(idx);
     geo.computeVertexNormals();
     group.add(new THREE.Mesh(geo, riverMat));

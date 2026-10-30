@@ -119,6 +119,8 @@ rivers = [
     dict(path=meander(18, 150, 760, 5), w=26, from_r=360),
     dict(path=meander(165, 150, 355, 6), w=20),   # south-west flow, beside the Ash Ridge
     dict(path=meander(262, 150, 172, 7), w=15),   # north-west spill under the rim
+    # west spill: wells up between the Summit Sprint's top hairpins and runs down across its first leg (jumped)
+    dict(path=meander(-139.5, 349, 424, 8, 0.03), w=15, bridged=True),
 ]
 lake_c = np.array([219.0, 601.0])
 lake_r = 70.0
@@ -298,8 +300,15 @@ def bump(n, i, half, closed):
 th = th - delta / 2 * bump(len(th), xi, 300, False)
 loop['th'] = loop['th'] + delta / 2 * bump(len(loop['th']), jl, 300, True)
 print(f'  junction delta {delta:.1f} m')
-TRACKS.append(dict(id='summit', name='Summit Sprint', kind='sprint', closed=False, C=C, th=th, gap=np.zeros(len(C), bool),
-                   width=13.0, start=20, laps=1, bankK=10, crossing=xi))
+# the west spill crosses the first leg up the cone under a bridge: the road keeps its line and grade, the
+# ground under the span is cut away for the lava, and the game builds the deck and its railings
+dd, _ = cKDTree(rivers[3]['path']).query(C)
+sj = int(np.argmin(dd))
+rel = np.arange(len(C)) - sj
+sgap = (rel >= -13) & (rel <= 13)
+print(f'  summit lava bridge at {sj}, river {dd[sj]:.1f} m off')
+TRACKS.append(dict(id='summit', name='Summit Sprint', kind='sprint', closed=False, C=C, th=th, gap=sgap,
+                   width=13.0, start=20, laps=1, bankK=10, crossing=xi, bridge=[sj - 13, sj + 13]))
 
 # --- Ashfall Village circuit: on the ash plain south-west, through the village streets and out round the fields
 VC = np.array([-705.0, 591.0])          # village square
@@ -678,6 +687,12 @@ for rv in rivers:
     p = rv['path']
     bottom = sample(H, p[:, 0], p[:, 1])
     surf = np.minimum.accumulate(gaussian_filter(bottom, 4)) + 1.8
+    if rv.get('bridged'):
+        # the road's embankment either side of the bridge would dam the channel: cut it back out under the span
+        dch, ich = cKDTree(p).query(pts_all, distance_upper_bound=40)
+        dch = dch.reshape(H.shape); ich = np.minimum(ich, len(p) - 1).reshape(H.shape)
+        wch = np.array(rv['width'])[ich] * 0.5 + 3
+        H = np.where(dch < wch, np.minimum(H, surf[ich] - 2.5 + ss(0, 1, dch / wch) * 1.5), H)
     riv_out.append(dict(points=[[round(float(a), 2), round(float(h), 2), round(float(b), 2)]
                                 for (a, b), h in zip(p[::2], surf[::2])],
                         width=[round(float(w) + 4, 2) for w in np.array(rv['width'])[::2]]))
@@ -705,7 +720,7 @@ def track_json(t):
             out[k] = int(t[k])
     if 'centre' in t:
         out['villageCentre'] = t['centre']
-    for k in ('segs', 'lip', 'land', 'loopJump', 'shared', 'runout', 'leap', 'runup'):
+    for k in ('segs', 'lip', 'land', 'loopJump', 'shared', 'runout', 'leap', 'runup', 'bridge'):
         if k in t:
             out[k] = t[k]
     return out

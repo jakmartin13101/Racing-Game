@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { loadPropModels, makePlacer } from './props.js';
 import { mulberry, nearTrack } from './world.js';
+import { patchWind } from './ambient.js';
 
 const BASE = import.meta.env.BASE_URL;
 
@@ -219,6 +220,8 @@ export async function buildVillage(world, scene, M, quality, tracks) {
   const names = ['dead_tree_trunk', 'dead_tree_trunk_02', 'island_tree_01', 'dry_branches_medium_01', 'shrub_01', 'shrub_02', 'shrub_03', 'shrub_04',
     'street_lamp_01', 'painted_wooden_bench', 'wooden_crate_01', 'Barrel_02', 'wine_barrel_01', 'stone_fire_pit', 'wooden_picnic_table'];
   const models = await loadPropModels(names);
+  // trees and shrubs move in the wind: the tip swings about 3% of the plant's height
+  for (const n of names.filter((k) => /shrub|tree|branches/.test(k))) for (const { mat } of models[n].meshes) patchWind(mat, 0.03 / Math.max(0.3, models[n].size.y));
   const { put, build, handles } = makePlacer(world, models, rnd);
   const vc = track.villageCentre;
   const W = track.width;

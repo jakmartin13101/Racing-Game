@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
+import { roadCrack } from './quake.js';
 import { mulberry } from './world.js';
 
 // Eruption, the World Race finale, a hill climb. The climb: the ground heaves up into ramps and fissures crack
@@ -131,37 +132,21 @@ export class Eruption {
   }
 
   fissure(i, time) {
-    const t = this.t, hz = this.hz, W = t.width + 8;
+    const t = this.t, hz = this.hz, W = t.width + 4;
     const f = t.frame(i);
-    const NU = 10, NV = 2, L = 2.4 + this.rnd() * 2, verts = [], uvs = [], idx = [];
-    const skew = (this.rnd() - 0.5) * 0.6;
-    for (let j = 0; j <= NV; j++) for (let k = 0; k <= NU; k++) {
-      const lat = (k / NU - 0.5) * W, al = (j / NV - 0.5) * L + lat * skew;
-      const x = f.x + f.nx * lat + f.tx * al, z = f.z + f.nz * lat + f.tz * al;
-      verts.push(x, hz.world.heightAt(x, z) + 0.16, z);
-      uvs.push(k / NU, j / NV);
-    }
-    for (let j = 0; j < NV; j++) for (let k = 0; k < NU; k++) {
-      const a = j * (NU + 1) + k, b = a + 1, c = a + NU + 1, d = c + 1;
-      idx.push(a, c, b, b, c, d);
-    }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-    g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-    g.setIndex(idx);
-    const mat = new THREE.MeshBasicMaterial({ map: crackTexture(this.rnd), color: new THREE.Color(2.6, 0.85, 0.22), transparent: true,
-      blending: THREE.AdditiveBlending, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, side: THREE.DoubleSide });
-    const mesh = new THREE.Mesh(g, mat);
-    hz.group.add(mesh);
-    this.fissures.push({ mesh, mat, f, W, L, age: 0 });
-    if (this.fissures.length > 10) { const o = this.fissures.shift(); hz.group.remove(o.mesh); o.mat.map.dispose(); o.mat.dispose(); o.mesh.geometry.dispose(); }
+    const L = 2.6 + this.rnd() * 1.6, skew = (this.rnd() - 0.5) * 0.6;
+    // a crack rips across the road, its edges shoved up into low ridges of road
+    const meshes = roadCrack(hz.M, hz.world, t, f, W, L, skew, this.rnd, hz.group);
+    this.fissures.push({ meshes, f, W, L, age: 0 });
+    if (this.fissures.length > 10) { const o = this.fissures.shift(); for (const m of o.meshes) { hz.group.remove(m); m.geometry.dispose(); m.material.map?.dispose(); m.material.dispose(); } }
     // the crack bursts open
     for (let k = 0; k < 14; k++) {
       const lat = (this.rnd() - 0.5) * W;
       const x = f.x + f.nx * lat, z = f.z + f.nz * lat;
       const y = hz.world.heightAt(x, z) + 0.3;
-      hz.fx.smoke.emit(new THREE.Vector3(x, y, z), tmp.set(this.rnd() - 0.5, 2 + this.rnd() * 3, this.rnd() - 0.5), 1.2, time, 3.5, 0.3, 0.27, 0.23);
-      if (k % 3 === 0) hz.fx.sparks(new THREE.Vector3(x, y, z), tmp.set(0, 1, 0), time, 4);
+      const c = 0.36 + this.rnd() * 0.1;
+      hz.fx.smoke.emit(new THREE.Vector3(x, y, z), tmp.set(this.rnd() - 0.5, 2 + this.rnd() * 3, this.rnd() - 0.5), 1.4, time, 3.5, c, c * 0.9, c * 0.8);
+      hz.chips.throw(new THREE.Vector3(x, y, z), tmp.set((this.rnd() - 0.5) * 3, 3 + this.rnd() * 5, (this.rnd() - 0.5) * 3), 0.08 + this.rnd() * 0.18);
     }
   }
 
@@ -225,11 +210,11 @@ export class Eruption {
     }
     for (const fs of this.fissures) {
       fs.age += dt;
-      fs.mat.opacity = Math.max(0, 1 - Math.max(0, fs.age - 40) / 20) * (0.75 + 0.25 * Math.sin(time * 5 + fs.age));
-      if (fs.age < 25 && Math.random() < 0.08) {
+      // dust keeps sifting out of the crack for a while
+      if (fs.age < 12 && Math.random() < 0.08) {
         const lat = (Math.random() - 0.5) * fs.W, f = fs.f;
         const x = f.x + f.nx * lat, z = f.z + f.nz * lat;
-        const c = 0.3; hz.fx.smoke.emit(new THREE.Vector3(x, hz.world.heightAt(x, z) + 0.3, z), tmp.set(0, 1.4, 0), 0.9, time, 3, c, c * 0.95, c * 0.9);
+        const c = 0.4; hz.fx.smoke.emit(new THREE.Vector3(x, hz.world.heightAt(x, z) + 0.3, z), tmp.set(0, 1.0, 0), 0.9, time, 3, c, c * 0.9, c * 0.8);
       }
     }
     this.fountains.update(dt, time, this.erupting);
@@ -251,27 +236,8 @@ export class Eruption {
     for (const h of this.heaves) h.dispose();
     this.rocks.dispose();
     this.flow.dispose();
-    for (const fs of this.fissures) { fs.mat.map.dispose(); fs.mat.dispose(); fs.mesh.geometry.dispose(); }
+    for (const fs of this.fissures) for (const m of fs.meshes) { m.geometry.dispose(); m.material.map?.dispose(); m.material.dispose(); }
   }
-}
-
-function crackTexture(rnd) {
-  const cv = document.createElement('canvas');
-  cv.width = 512; cv.height = 64;
-  const g = cv.getContext('2d');
-  // one jagged line, drawn twice: a wide soft glow, then the bright core
-  const pts = [];
-  let y = 32;
-  for (let x = 0; x <= 512; x += 14) { y = clamp(y + (rnd() - 0.5) * 18, 10, 54); pts.push([x, y]); }
-  for (const [w, col, blur] of [[9, 'rgba(255,90,20,0.55)', 18], [3, 'rgba(255,210,120,0.95)', 6]]) {
-    g.strokeStyle = col; g.lineWidth = w; g.shadowColor = col; g.shadowBlur = blur; g.lineJoin = 'round';
-    g.beginPath();
-    pts.forEach(([x, py], k) => (k ? g.lineTo(x, py) : g.moveTo(x, py)));
-    g.stroke();
-  }
-  const tex = new THREE.CanvasTexture(cv);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
 }
 
 // Lava fountains in the crater lake: glowing gobs thrown up from vents, stretched along their flight, cooling
@@ -384,7 +350,7 @@ class LavaFlow {
     const hz = eru.hz, t = eru.t, W = t.width;
     this.a = eru.land; this.b = t.n - 1;
     this.hw = W / 2 + 3.5;
-    const NU = 8, verts = [], uvs = [], idx = [];
+    const NU = 8, verts = [], uvs = [], flow = [], idx = [];
     let rows = 0;
     for (let i = this.a; i <= this.b; i += 2) {
       const f = t.frame(i);
@@ -393,6 +359,7 @@ class LavaFlow {
         const x = f.x + f.nx * lat, z = f.z + f.nz * lat;
         verts.push(x, hz.world.heightAt(x, z) + 0.42 - (lat / this.hw) ** 2 * 0.2, z);
         uvs.push(i - this.a, lat);
+        flow.push(k / NU * 2 - 1, 7);
       }
       rows++;
     }
@@ -403,6 +370,7 @@ class LavaFlow {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setAttribute('flow', new THREE.Float32BufferAttribute(flow, 2));
     geo.setIndex(idx);
     geo.computeVertexNormals();
     this.uFront = { value: -50 };

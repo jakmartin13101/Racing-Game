@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { mulberry } from './world.js';
 import { Eruption } from './eruption.js';
+import { Bridge } from './bridge.js';
+import { makeSlab, Chips, crackCanvas } from './quake.js';
 
 // Track action: volcanic bombs raining on the village (and the upper summit road), boulders rolling off the
 // slopes on the summit sprint, and on Caldera Loop a lava breakout after lap one with the ground heaving up
@@ -75,6 +77,7 @@ export class Hazards {
     this.boulders = [];
     this.marks = [];
     this.scorchMat = new THREE.MeshBasicMaterial({ map: scorchTexture(), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 });
+    this.chips = new Chips(world, this.group, this.rockMat, this.lite ? 60 : 140);
     this.ringMat = new THREE.MeshBasicMaterial({ color: 0xff5a12, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
     // what runs where
     const id = track.id;
@@ -86,6 +89,7 @@ export class Hazards {
     if (id === 'caldera') this.lava = new LavaBreakout(this, lava);
     // the finale: heaving ground and breakouts on the climb, the crater leap, the lava chasing the pack down
     if (id === 'eruption') { this.erupt = new Eruption(this, lava, (opts) => new LavaBreakout(this, lava, opts)); this.env = 0; }
+    if (track.bridge) this.bridge = new Bridge({ phys, scene, track, world, M });
   }
 
   // before the physics step: spawn, steer kinematic bodies
@@ -226,6 +230,8 @@ export class Hazards {
     this.marks = this.marks.filter((m) => { if (m.age > 40) { this.group.remove(m.mesh); m.mesh.material.dispose(); return false; } return true; });
     this.lava?.post(dt, race, time);
     this.erupt?.post(dt, race, time);
+    this.chips.update(dt);
+    this.bridge?.update(time);
   }
 
   land(b, race, p, time) {
@@ -277,6 +283,7 @@ export class Hazards {
     for (const r of this.boulders) if (r.body) this.phys.removeRigidBody(r.body);
     this.lava?.dispose();
     this.erupt?.dispose();
+    this.bridge?.dispose(this.phys, this.scene);
     this.scene.remove(this.group);
   }
 }
@@ -355,20 +362,32 @@ if (abs(vT.y - 0.5) * 2.0 > 0.72 + edgeN * 0.3 - smoothstep(0.0, 0.2, uFront - v
     // the slab that heaves up: 9 m wide, 9 m long, its lip a metre short of the lava
     this.rampAlong = -(this.half + 1 + 4.5);
     this.rampLen = 9; this.rampW = 9; this.rampTh = 0.7; this.pitch = 0.25;
-    const slab = new THREE.Mesh(new THREE.BoxGeometry(this.rampW, this.rampTh, this.rampLen, 8, 2, 8), bombMaterial(hz.M.noise, 0, 0.5, 1));
-    // the broken crust glows along its cracks, cooling over the next half minute
-    this.slabHeat = slab.material.userData.heat; this.slabHeat.value = 0.75;
-    // ragged edges
-    const sp = slab.geometry.attributes.position;
-    for (let i = 0; i < sp.count; i++) {
-      const y = sp.getY(i);
-      if (y > 0) sp.setY(i, y + (Math.sin(sp.getX(i) * 2.1) * Math.cos(sp.getZ(i) * 1.7)) * 0.12);
-    }
-    slab.geometry.computeVertexNormals();
-    slab.castShadow = true; slab.receiveShadow = true;
+    // a slab of the road itself, wrenched up on its torn earth
+    const slab = makeSlab(hz.M, this.rampW, this.rampLen, this.rampTh, 900 + this.i0, t.width);
     slab.visible = false;
     hz.group.add(slab);
     this.slab = slab;
+    // where it tore out of the road: a dark hole of earth under the lifted lip, and cracks running off across the road
+    const cr = new THREE.Mesh(new THREE.PlaneGeometry(1, 1, 8, 8).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({
+      map: crackCanvas(mulberry(this.i0), 512, 512, { main: 5, branches: 18, border: false, width: 9 }), transparent: true, depthWrite: false,
+      polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 }));
+    const cx = f.x + f.tx * this.rampAlong, cz = f.z + f.tz * this.rampAlong;
+    const cp = cr.geometry.attributes.position;
+    for (let k = 0; k < cp.count; k++) {
+      const lat = cp.getX(k) * (W + 2), al = cp.getZ(k) * (this.rampLen + 10);
+      const x = cx + f.nx * lat + f.tx * al, z = cz + f.nz * lat + f.tz * al;
+      cp.setXYZ(k, x, hz.world.heightAt(x, z) + 0.16, z);
+    }
+    cr.renderOrder = 2;
+    cr.visible = false;
+    hz.group.add(cr);
+    this.crackDecal = cr;
+    // (only under the front of it: the back edge stays down on the road)
+    const pit = new THREE.Mesh(new THREE.PlaneGeometry(this.rampW - 0.6, this.rampLen * 0.45).rotateX(-Math.PI / 2).translate(0, 0, this.rampLen * 0.25), new THREE.MeshStandardMaterial({ color: 0x17120e, roughness: 1 }));
+    pit.visible = false;
+    hz.group.add(pit);
+    this.pit = pit;
+    this.chips = hz.chips;
     this.body = hz.phys.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(f.x, -500, f.z));
     hz.phys.createCollider(RAPIER.ColliderDesc.cuboid(this.rampW / 2, this.rampTh / 2, this.rampLen / 2).setFriction(1).setCollisionGroups(G_GROUND), this.body);
     this.jump = this.withLava ? { at: t.wrap(this.i0 - this.half - 1), speed: 24, flat: 30, land: t.wrap(this.i0 + 24) }
@@ -396,7 +415,17 @@ if (abs(vT.y - 0.5) * 2.0 > 0.72 + edgeN * 0.3 - smoothstep(0.0, 0.2, uFront - v
     const hz = this.hz;
     if (this.state === 'idle') {
       // the leader starting lap two sets it off
-      if (this.trigger(race)) { this.state = 'rise'; this.T = 0; this.slab.visible = true; hz.events?.push({ type: this.event, i: this.i0 }); }
+      if (this.trigger(race)) {
+        this.state = 'rise'; this.T = 0; this.slab.visible = true; this.crackDecal.visible = true;
+        hz.events?.push({ type: this.event, i: this.i0 });
+        // the road bursts: chunks of it and stones thrown up all round the slab
+        const f = this.f, c = this.pose(0).p;
+        for (let k = 0; k < 26; k++) {
+          const a = (Math.random() - 0.5) * (this.rampW + 3), b = (Math.random() - 0.5) * (this.rampLen + 3);
+          const x = c.x + f.nx * a + f.tx * b, z = c.z + f.nz * a + f.tz * b;
+          hz.chips.throw(tmp.set(x, hz.world.heightAt(x, z) + 0.2, z), new THREE.Vector3(f.nx * a * 0.6 + (Math.random() - 0.5) * 2, 4 + Math.random() * 7, f.nz * a * 0.6 + (Math.random() - 0.5) * 2), 0.12 + Math.pow(Math.random(), 2) * 0.45);
+        }
+      }
       return;
     }
     this.T += dt;
@@ -405,14 +434,21 @@ if (abs(vT.y - 0.5) * 2.0 > 0.72 + edgeN * 0.3 - smoothstep(0.0, 0.2, uFront - v
     this.body.setNextKinematicTranslation(p);
     this.body.setNextKinematicRotation(q);
     this.slab.position.copy(p); this.slab.quaternion.copy(q);
-    this.slabHeat.value = 0.35 + 0.4 * Math.exp(-this.T / 25);
+    if (!this.pit.visible) {
+      // the hole it leaves, on the road under the slab
+      const f = this.f, c = this.pose(0).p;
+      this.pit.position.set(c.x, this.hz.world.heightAt(c.x, c.z) + 0.06, c.z);
+      this.pit.rotation.y = f.yaw;
+      this.pit.visible = true;
+    }
     // cracking ground: dust and stone chips while it heaves
-    if (this.T < this.rise + 0.5 && Math.random() < (this.rise < 2 ? 1 : 0.6)) {
+    if (this.T < this.rise + 0.5 && Math.random() < (this.rise < 2 ? 0.45 : 0.3)) {
       const a = (Math.random() - 0.5) * this.rampW, b = (Math.random() - 0.5) * this.rampLen;
       const f = this.f;
       const x = p.x + f.nx * a + f.tx * b, z = p.z + f.nz * a + f.tz * b;
-      hz.fx.smoke.emit(new THREE.Vector3(x, hz.world.heightAt(x, z) + 0.3, z), tmp.set(Math.random() - 0.5, 1.5 + Math.random() * 2, Math.random() - 0.5), 1.1, time, 3, 0.3, 0.27, 0.23);
-      if (Math.random() < 0.3) hz.fx.sparks(new THREE.Vector3(x, hz.world.heightAt(x, z) + 0.2, z), tmp.set(0, 1, 0), time, 3);
+      const c = 0.36 + Math.random() * 0.1;
+      hz.fx.smoke.emit(new THREE.Vector3(x, hz.world.heightAt(x, z) + 0.3, z), tmp.set(Math.random() - 0.5, 1.5 + Math.random() * 2.5, Math.random() - 0.5), 0.9 + Math.random() * 0.8, time, 2.5, c, c * 0.9, c * 0.8);
+      if (Math.random() < 0.35) hz.chips.throw(new THREE.Vector3(x, hz.world.heightAt(x, z) + 0.2, z), tmp.set((Math.random() - 0.5) * 3, 3 + Math.random() * 4, (Math.random() - 0.5) * 3), 0.08 + Math.random() * 0.15);
     }
     if (this.T > this.rise * 0.5 && !this.jumpOn) { this.jumpOn = true; hz.track.jumps.push(this.jump); }
     // lava floods across from the uphill side

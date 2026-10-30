@@ -25,16 +25,17 @@ npm run dist:win   # Windows installer -> release/GravelRiot-Setup.exe (needs ma
 Tracks share one volcano map:
 
 - **Caldera Loop** (main track, 2.9 km): the original loop with the lava-river jump. Once the leader starts
-  lap two, the ground in the canyon heaves up into a ramp and lava floods across the road just past it: jump
-  it or lose the truck to the lava.
+  lap two, the road in the canyon breaks and a slab of it heaves up into a ramp, and lava floods across the
+  road just past it: jump it or lose the truck to the lava.
 - **Ashfall Village** (1.9 km): a circuit through the streets of the village below the volcano, under a
   steady rain of glowing volcanic bombs, small and large. A red ring marks where each one will land.
 - **Summit Sprint** (3.2 km, point to point): switchbacks from the foothills up to the summit lookout.
-  Boulders roll off the slopes, and bombs fall on the upper half.
+  On the first leg up the cone a concrete bridge carries the road over a lava spill running down the
+  mountain. Boulders roll off the slopes, and bombs fall on the upper half.
 - **Eruption** (6.4 km, point to point, the finale): from the plain at the foot of the volcano, along the
   Caldera Loop's flank and over its lava jump, then a hill climb up the cone: three long sweeping legs and
-  a run out along Ash Ridge. On the way up the ground heaves into ramps right in front of you, quakes crack
-  glowing fissures across the road just ahead, one ramp floods with lava behind it, and the sky darkens as
+  a run out along Ash Ridge. On the way up the road breaks into slabs that heave up into ramps right in
+  front of you, quakes rip cracks across the road just ahead and shove their edges up, one ramp floods with lava behind it, and the sky darkens as
   the volcano wakes. At the top a straight downhill run-in ends in a kicker. Hit it fast and the truck is
   flung about 175 m across the crater through fountains of lava on a real ballistic arc, landing on a
   downslope cut to match it (the player's leap plays in slow motion with its own camera shots); too slow
@@ -42,6 +43,11 @@ Tracks share one volcano map:
   descent to the finish on the plain. It runs fast on every difficulty and gives less room for a crash or
   slowdown the harder the setting; heavy rocks lie on the road, and a truck the lava catches is burned out
   (DNF). The HUD shows how far back the lava is.
+
+All around the tracks the world is alive: the lava rivers run visibly down the mountain (fastest down the
+middle and where it is steep), smoking and spitting molten gobs; the lava lake and the crater pool bubble and
+burst; steam vents hiss on the cone; birds wheel over the plain; and dry grass, shrubs and trees move in the
+wind. The ground has erosion gullies down the slopes, grit and loose stones, and the roads have potholes.
 
 The browser and phones cap at 30 fps and default to lighter graphics; the desktop app runs uncapped at high.
 
@@ -84,7 +90,7 @@ Cameras: chase, far chase, hood, bumper and trackside TV.
 `tools/truck/split.py` cuts the breakable parts out of the baked truck models.
 
 URL options: `?race=caldera|village|summit|eruption`, `&ai=N`, `&laps=N`, `&diff=easy|normal|hard`, `&cam=...`,
-`?q=low|medium|high|ultra`, `?sub=N` (physics substeps), `?nofog`, `?noshafts`, `?nodof`, `?noskid`, `?fps=N`, `?auto` (autopilot), `?blow` (force an engine blow), `?at=N&yaw=R&ram=V` (crash test), `?lava=N` (Eruption: start the lava N m behind the truck placed with `at`), `?trace` (log truck progress), `?still=N` (render one frame after N simulated steps,
+`?q=low|medium|high|ultra`, `?sub=N` (physics substeps), `?nofog`, `?noshafts`, `?nodof`, `?noskid`, `?fps=N`, `?auto` (autopilot), `?blow` (force an engine blow), `?at=N&yaw=R&ram=V` (crash test), `?lava=N` (Eruption: start the lava N m behind the truck placed with `at`), `?trace` (log truck progress), `?look=x,y,z,tx,ty,tz` (a fixed camera, for scenery shots), `?still=N` (render one frame after N simulated steps,
 used for headless captures).
 
 ## Code

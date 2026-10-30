@@ -59,7 +59,7 @@ export function saveSettings(patch) {
 
 export function quality() {
   const s = settings();
-  const q = { ...PRESETS[s.quality] };
+  const q = { ...PRESETS[s.quality], name: s.quality };
   const params = new URLSearchParams(location.search);
   if (params.has('ao')) q.ao = params.get('ao') === '1';
   if (params.has('sub')) q.substeps = +params.get('sub');

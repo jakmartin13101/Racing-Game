@@ -9,6 +9,7 @@ import { patchHeightFog, SunShafts, Focus, SkidMarks } from './ultra.js';
 import { Debris, Breakables } from './crash.js';
 import { buildProps } from './props.js';
 import { buildVillage } from './village.js';
+import { Ambient } from './ambient.js';
 import { initPhysics, loadTruckAssets, addStaticBoxes } from './vehicle.js';
 import { Track } from './track.js';
 import { Race } from './race.js';
@@ -21,6 +22,8 @@ import { mulberry } from './world.js';
 
 const params = new URLSearchParams(location.search);
 // ?trace: every half second, each truck's row, speed and wheels down (for headless test runs)
+// look=x,y,z,tx,ty,tz: a fixed camera, for screenshots of the scenery
+const LOOK = params.has('look') ? params.get('look').split(',').map(Number) : null;
 const TRACE = params.has('trace') ? (window.__trace = { n: 0, rows: [] }) : null;
 if (params.has('ltrace')) window.__ltrace = [];
 const SLOW = params.has('slow') ? (window.__slow = { min: 1, real: 0, slowFor: 0 }) : null;
@@ -82,6 +85,7 @@ scene.add(ash);
 const dust = new Dust(M, 700);
 dust.mat.uniforms.uSun.value.copy(sun);
 scene.add(dust.mesh);
+const ambient = new Ambient({ scene, world, M, quality, tracks, sun });
 loadStep(0.45, 'PLACING ROCKS AND PROPS…');
 const props = await buildProps(world, scene, M, quality, tracks);
 loadStep(0.6, 'BUILDING ASHFALL VILLAGE…');
@@ -418,6 +422,7 @@ function frame(real) {
     blurAmt = 0.3;
     focus.set(camera.position.x * 0.5, 0, camera.position.z * 0.5);
   }
+  if (LOOK) { camera.position.set(LOOK[0], LOOK[1], LOOK[2]); camera.up.set(0, 1, 0); camera.lookAt(LOOK[3], LOOK[4], LOOK[5]); camera.updateMatrixWorld(); }
   // Eruption: the sky closes in as the pack climbs and burns red once the volcano blows
   const envK = race?.hazards?.env ?? 0;
   scene.fog.color.copy(fogColor).lerp(fogHot, envK * 0.55);
@@ -432,6 +437,7 @@ function frame(real) {
   ash.material.uniforms.uScale.value = innerHeight * renderer.getPixelRatio() * 0.6;
   dust.update(t);
   crashFx.update(t, dt);
+  ambient.update(t, dt, camera.position);
   props.update?.(t);
   // shadow frustum follows the focus point, texel-snapped to stop shimmering
   const texel = (sc.right - sc.left) / sunLight.shadow.mapSize.x;
@@ -507,7 +513,9 @@ function frameNoRender(real) {
   t += dt;
   simulate(dt);
   if (race) { race.sync(dt, t, null, camera.position); rig.update(dt, race.player.v, race.track, race.player.i, false); }
+  if (LOOK) camera.position.set(LOOK[0], LOOK[1], LOOK[2]);
   crashFx.update(t, dt);
+  ambient.update(t, dt, camera.position);
 }
 
 // frame cap: browser and phone builds default to 30 fps, the desktop app runs uncapped

@@ -68,7 +68,7 @@ export function waterTextures() {
 }
 
 // ---------------------------------------------------------------- coast field
-function buildCoast(world, N) {
+function buildCoast(world, N, tracks) {
   const { extent, half } = world;
   const cell = extent / N;
   const h = new Float32Array(N * N);
@@ -160,6 +160,24 @@ function buildCoast(world, N) {
     const a = Math.max(i - s3, 0), b = Math.min(i + s3, N - 1), c = Math.max(j - s3, 0), e = Math.min(j + s3, N - 1);
     const gx = (h[j * N + b] - h[j * N + a]) / ((b - a) * cell), gz = (h[e * N + i] - h[c * N + i]) / ((e - c) * cell);
     steep[k] = THREE.MathUtils.smoothstep(Math.hypot(gx, gz), 0.12, 0.55);
+  }
+  // Pali Kai's reef flats: the causeway is narrow with deeper water close by in places, which would read as an
+  // open beach and flood the road every wave. Over the reef rows the run-up is set so ordinary waves lap the road's
+  // edges and only the bigger sets wash right across it.
+  const base = rs.slice(), done = new Float32Array(N * N);
+  for (const t of tracks || []) {
+    if (!t.reef) continue;
+    const R = 70, r0 = 40, ext = Math.ceil(R / cell);
+    for (let row = t.reef[0]; row <= t.reef[1]; row += 3) {
+      const c = t.at(row);
+      const ci = Math.floor((c[0] + half) / cell), cj = Math.floor((c[2] + half) / cell);
+      for (let j = Math.max(cj - ext, 0); j <= Math.min(cj + ext, N - 1); j++) for (let i = Math.max(ci - ext, 0); i <= Math.min(ci + ext, N - 1); i++) {
+        const x = -half + (i + 0.5) * cell, z = -half + (j + 0.5) * cell;
+        const w = 1 - THREE.MathUtils.smoothstep(Math.hypot(x - c[0], z - c[2]), r0, R);
+        const k = j * N + i;
+        if (w > (done[k] || 0)) { rs[k] = THREE.MathUtils.lerp(base[k], 0.52, w); done[k] = w; }
+      }
+    }
   }
   const data = new Uint16Array(N * N * 4);
   const hf = THREE.DataUtils.toHalfFloat;
@@ -257,7 +275,7 @@ export class Spray {
           float p1 = smoothstep(40.2, 41.0, th) * (1.0 - smoothstep(42.1, 42.7, th));
           float p2 = smoothstep(50.2, 51.0, th) * (1.0 - smoothstep(53.0, 53.8, th));
           vec3 bow = hue(clamp((42.5 - th) / 2.2, 0.0, 1.0) * 0.78) * p1 + hue(clamp((th - 50.3) / 3.4, 0.0, 1.0) * 0.78) * p2 * 0.4;
-          c += bow * uSunCol * 0.5 * step(0.0, uSun.y);
+          c += bow * uSunCol * 0.32 * step(0.0, uSun.y);
           #endif
           float fog = 1.0 - exp(-uFogD * uFogD * vDepth * vDepth);
           c = mix(c, uFogC, fog);
@@ -319,7 +337,7 @@ export function buildOcean(ctx) {
   const { world, scene, quality, sun, M } = ctx;
   const tier = tierOf(quality);
   const sea = world.data.water?.sea ?? 0;
-  const coast = buildCoast(world, tier >= 2 ? 2048 : 1024);
+  const coast = buildCoast(world, tier >= 2 ? 2048 : 1024, ctx.tracks);
   ctx.coast = coast; // fresh water reads the same field and shares the spray
   const W = waterTextures();
   const skyU = findSky(scene);
@@ -347,7 +365,6 @@ export function buildOcean(ctx) {
     ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
   };
   const defs = { NW, TIER: tier };
-  if (location.search.includes('wdbg')) defs.DBG = 1;
   const vert = /* glsl */`
     #include <common>
     #include <fog_pars_vertex>
@@ -457,7 +474,7 @@ export function buildOcean(ctx) {
       vec3 ft = texture2D(tFoam, xz / 13.0 + fdrift * 0.08 + N.xz * 0.15).rgb;
       vec3 ft2 = texture2D(tFoam, xz / 37.0 - fdrift * 0.03).rgb;
       float fpat = mix(max(ft.r, ft2.r * 0.8) * 0.75 + ft.g * 0.25, ft2.r * 0.6 + 0.3, smoothstep(30.0, 250.0, dist));
-      float foam = clamp(foamAmt * 1.25 - (1.0 - fpat) * 1.1, 0.0, 1.0) * (1.0 - far * 0.6);
+      float foam = smoothstep(0.0, 0.45, foamAmt * 1.25 - (1.0 - fpat) * 1.1) * (1.0 - far * 0.6);
       foam = max(foam, clamp(foamAmt - 0.9, 0.0, 1.0) * 0.6);
       // and a soft milky wash of old foam and churned sand over the surf zone, never thresholded into speckle
       float lace = zone * smoothstep(2.5, 0.4, depth) * (0.25 + 0.5 * exp(-f * 3.0)) * (0.5 + 0.5 * fpat) * (1.0 - far);
@@ -472,7 +489,7 @@ export function buildOcean(ctx) {
       R.y = max(R.y, 0.0) * 0.75 + 0.1;
       vec3 sky = skyCol(normalize(R)) * 0.85;
       vec3 H = normalize(V + L);
-      float rough = mix(0.1, 0.2, far);
+      float rough = mix(0.13, 0.22, far);
       float NL = max(dot(N, L), 0.0);
       vec3 spec = uSunCol * ggx(max(dot(N, H), 0.0), rough) * F * 0.25 / max(NV, 0.2) * NL * (1.0 - foam);
       // water body. Plain alpha blending can't absorb red more than blue, so the shader paints the sea floor itself
@@ -512,9 +529,6 @@ export function buildOcean(ctx) {
       float edge = smoothstep(-0.02, 0.3, depth);
       col *= edge; a *= edge;
       gl_FragColor = vec4(col, a);
-      #ifdef DBG
-      gl_FragColor = vec4(fract(sd / 20.0), clamp(depth * 0.2, 0.0, 1.0), c.b, 1.0);
-      #endif
       #ifdef USE_FOG
       #include <fog_fragment>
       #endif
@@ -580,19 +594,21 @@ export function buildOcean(ctx) {
   let clock = 0;
   const rnd = Math.random;
 
-  const wetness = (p) => {
+  const wetAt = (p, time) => {
     const sd = coast.sample(coast.sd, p.x, p.z);
     if (sd > 45) return 0;
     const h = coast.sample(coast.h, p.x, p.z);
     const inSea = THREE.MathUtils.clamp((sea - h) * 3, 0, 1);
     const rs = coast.sample(coast.rs, p.x, p.z);
-    const psi = clock / SURF.T + surfOff(p.x, p.z);
+    const psi = time / SURF.T + surfOff(p.x, p.z);
     const n = Math.floor(psi), amp = waveAmp(n);
     const F = swashFront(psi - n, SURF.R0 * rs * amp);
     const top = swashTop(amp, rs);
     const cover = THREE.MathUtils.smoothstep(F - sd, -0.3, 2.5) * THREE.MathUtils.smoothstep(top + 0.3 - h, 0, 0.5);
     return Math.max(cover, inSea);
   };
+  const wetness = (p) => wetAt(p, clock);
+  if (import.meta.env.DEV) window.__ocean = { wetAt, coast };
 
   return {
     wetness,
@@ -729,8 +745,10 @@ function buildSwash(ctx, coast, W, skyU, sunCol, tier) {
         float back = (1.0 - upr) * cover * ft.g * 0.5;
         float body = 0.0;
         float fa = lead * (upr * 1.1 + 0.45) + back + body;
-        float fpat = ft.r * 0.7 + texture2D(tFoam, xz / 17.0 - vec2(uTime * 0.01, 0.0)).r * 0.5;
-        float foam = clamp(fa * 1.3 - (1.0 - fpat), 0.0, 1.0);
+        // two scales of bubble cells, offset so their edges never line up into a crackle pattern
+        vec3 ft3 = texture2D(tFoam, xz / 17.0 - vec2(uTime * 0.01, 0.0) + 0.37).rgb;
+        float fpat = ft.r * 0.45 + ft3.r * 0.35 + ft3.g * 0.25 + ft.b * 0.15;
+        float foam = smoothstep(0.0, 0.55, fa * 1.3 - (1.0 - fpat) * 0.9);
         // lighting
         vec3 V = normalize(cameraPosition - vW);
         vec2 rip = (texture2D(tNC, xz / 4.0 + vec2(uTime * 0.05, uTime * 0.03)).rg * 2.0 - 1.0) * (0.12 * cover + 0.03);
@@ -740,7 +758,7 @@ function buildSwash(ctx, coast, W, skyU, sunCol, tier) {
         vec3 Rf = reflect(-V, N); Rf.y = max(Rf.y, 0.03);
         vec3 sky = skyCol(normalize(Rf));
         vec3 H = normalize(V + uSun);
-        vec3 spec = uSunCol * ggx(max(dot(N, H), 0.0), mix(0.25, 0.08, cover)) * F * 0.25 / max(NV, 0.2) * max(dot(N, uSun), 0.0);
+        vec3 spec = uSunCol * ggx(max(dot(N, H), 0.0), mix(0.3, 0.18, cover)) * F * 0.25 / max(NV, 0.2) * max(dot(N, uSun), 0.0);
         float gloss = max(cover, sheen * 0.55);
         vec3 col = (F * sky + spec) * gloss + vec3(0.01, 0.05, 0.05) * cover * 0.3;
         // wet sand is darker: the sheet's alpha darkens what is under it

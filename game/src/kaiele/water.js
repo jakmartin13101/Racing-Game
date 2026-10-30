@@ -144,8 +144,9 @@ export function buildFreshWater(ctx) {
         vec3 N = normalize(vec3(0.0, 1.0, 0.0) + (Tg * nn.x + Bt * nn.y) * str);
         vec3 V = normalize(cameraPosition - vW);
         float NV = max(dot(N, V), 1e-3);
-        float Fr = 0.02 + 0.98 * pow(1.0 - NV, 5.0);
-        vec3 sky = skyCol(reflect(-V, N));
+        float Fr = min(0.02 + 0.98 * pow(1.0 - NV, 5.0), 0.35);
+        vec3 Rr = reflect(-V, N); Rr.y = max(Rr.y, 0.0) * 0.75 + 0.1;
+        vec3 sky = skyCol(normalize(Rr)) * 0.85;
         vec3 H = normalize(V + uSun);
         vec3 spec = uSunCol * ggx(max(dot(N, H), 0.0), clamp(rough * 0.35, 0.06, 0.4)) * Fr * 0.25 / max(NV, 0.2) * max(dot(N, uSun), 0.0);
         // clear at the edges, jade green in the channel
@@ -157,7 +158,7 @@ export function buildFreshWater(ctx) {
         vec3 foamCol = vec3(0.86, 0.9, 0.9) * (amb * 1.4 + uSunCol * 0.3 * max(dot(N, uSun), 0.2));
         col = mix(col, foamCol, foam); al = mix(al, 1.0, foam);
         // soft edges: depth at the waterline and the ribbon's own sides
-        float e = smoothstep(0.0, 0.12, depth) * (1.0 - smoothstep(1.0, 1.28, abs(a)));
+        float e = smoothstep(0.02, 0.3, depth) * (1.0 - smoothstep(0.92, 1.28, abs(a)));
         gl_FragColor = vec4(col * e, al * e);
         #ifdef USE_FOG
         #include <fog_fragment>
@@ -197,17 +198,21 @@ export function buildFreshWater(ctx) {
       for (let j = 0; j <= across; j++) {
         const a = (j / across) * 2 - 1;
         const x = p.x + nx * a * ext, z = p.z + nz * a * ext;
-        const y = ys[i];
+        // inside the channel the water follows the bed wherever the ground has not been cut down for it (a shallow
+        // run over flat ground, the ford over the road); on the banks it keeps its level and fades out by depth
+        const h = world.heightAt(x, z), inC = Math.abs(a * ext) <= hw;
+        const y = inC ? Math.max(ys[i], h + 0.12) : ys[i];
+        const dep = inC ? Math.max(ys[i] - h, 0.42 * (1 - (a * ext / hw) ** 2) ** 1.5) : ys[i] - h;
         verts.push(x, y, z);
         uvs.push(s, a * ext);
-        flow.push(a * ext / hw, spd, y - world.heightAt(x, z), white);
+        flow.push(a * ext / hw, spd, dep, white);
       }
       wetPts.push({ x: p.x, z: p.z, y: ys[i], hw, spd });
       if (i < n - 1) s += Math.hypot(q.x - p.x, q.z - p.z);
     }
     for (let i = 0; i < n - 1; i++) for (let j = 0; j < across; j++) {
       const a = i * (across + 1) + j, b = a + 1, c = a + across + 1, d = c + 1;
-      idx.push(a, c, b, b, c, d);
+      idx.push(a, b, c, b, d, c);
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
@@ -307,6 +312,8 @@ export function buildFreshWater(ctx) {
           vec3 glass = vec3(0.04, 0.12, 0.1) * (amb + uSunCol * 0.2) + skyCol(reflect(-V, N)) * Fr;
           float lipFoam = smoothstep(1.8, 0.2, d) * 0.5 + streak * 0.3 * (1.0 - aer);
           vec3 col = mix(glass, white, clamp(aer * (0.55 + streak * 0.6) + lipFoam, 0.0, 1.0));
+          // ropes of denser water read brighter, the thin sheet between them darker
+          col *= 0.7 + 0.55 * max(streak, bub * 0.6) * aer + (1.0 - aer) * 0.3;
           gl_FragColor = vec4(col * a, a);
           #ifdef USE_FOG
           #include <fog_fragment>
@@ -339,7 +346,7 @@ export function buildFreshWater(ctx) {
       }
       for (let j = 0; j < RN; j++) for (let i = 0; i < AN; i++) {
         const a = j * AN + i, b = j * AN + (i + 1) % AN, c = a + AN, d = b + AN;
-        idx.push(a, c, b, b, c, d);
+        idx.push(a, b, c, b, d, c);
       }
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
@@ -462,15 +469,15 @@ export function buildFreshWater(ctx) {
     for (let k = 0; k < n; k++) {
       const te = t + rnd() * 0.7;
       // the column: jets of droplets
-      blow.emit(te, bh.x + (rnd() - 0.5), bhY, bh.z + (rnd() - 0.5), (rnd() - 0.5) * 3 + toRoad.x * 1.5, 15 + rnd() * 10, (rnd() - 0.5) * 3 + toRoad.z * 1.5,
-        0.8 + rnd() * 1.5, 2.6 + rnd() * 1.4, { drag: 0.5, grow: 1.6, opacity: 0.55, gravity: 1 });
+      blow.emit(te, bh.x + (rnd() - 0.5) * 1.5, bhY, bh.z + (rnd() - 0.5) * 1.5, (rnd() - 0.5) * 5 + toRoad.x * 1.5, 13 + rnd() * 12, (rnd() - 0.5) * 5 + toRoad.z * 1.5,
+        1.4 + rnd() * 2, 2.6 + rnd() * 1.6, { drag: 0.5, grow: 1.8, opacity: 0.7, gravity: 1 });
     }
     for (let k = 0; k < n * 0.4; k++) {
       const te = t + 0.2 + rnd() * 0.9;
       // and the cloud it leaves: big puffs carried over the road by the onshore breeze
       blow.emit(te, bh.x + (rnd() - 0.5) * 2, bhY + 2 + rnd() * 10, bh.z + (rnd() - 0.5) * 2,
         toRoad.x * (4 + rnd() * 5) + (rnd() - 0.5) * 3, 4 + rnd() * 8, toRoad.z * (4 + rnd() * 5) + (rnd() - 0.5) * 3,
-        4 + rnd() * 4, 5 + rnd() * 3, { drag: 0.8, grow: 0.9, opacity: 0.4, gravity: 0.12 });
+        5 + rnd() * 5, 6 + rnd() * 3, { drag: 0.8, grow: 1.0, opacity: 0.5, gravity: 0.1 });
     }
   };
   updates.push((t, dt, camera) => {
@@ -502,6 +509,7 @@ export function buildFreshWater(ctx) {
     return THREE.MathUtils.clamp((best.y - ground + 0.05) / 0.45, 0, 1);
   };
 
+  if (import.meta.env.DEV) window.__water = { reaches, lip, impact, group };
   return {
     riverDepth,
     update(t, dt, camera, race) {

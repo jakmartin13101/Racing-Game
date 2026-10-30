@@ -10,6 +10,7 @@ import { Debris, Breakables } from './crash.js';
 import { buildProps } from './props.js';
 import { buildVillage } from './village.js';
 import { Ambient } from './ambient.js';
+import { Volcano } from './volcano.js';
 import { initPhysics, loadTruckAssets, addStaticBoxes } from './vehicle.js';
 import { Track } from './track.js';
 import { Race } from './race.js';
@@ -72,7 +73,8 @@ const tracks = world.data.tracks.map((t) => new Track(t, world));
 const trackById = (id) => tracks.find((t) => t.id === id) || tracks[0];
 const M = loadMaterials();
 loadStep(0.3, 'BUILDING TERRAIN…');
-scene.add(buildTerrain(world, M, quality));
+const terrain = buildTerrain(world, M, quality);
+scene.add(terrain);
 for (const t of tracks) scene.add(buildTrackRibbon(world, M, t));
 const lava = buildLava(world, M);
 scene.add(lava);
@@ -88,6 +90,9 @@ scene.add(dust.mesh);
 const ambient = new Ambient({ scene, world, M, quality, tracks, sun });
 loadStep(0.45, 'PLACING ROCKS AND PROPS…');
 const props = await buildProps(world, scene, M, quality, tracks);
+// scoria fields, burnt forest, embers and ash fall on the cone
+const volcano = new Volcano({ scene, world, M, quality, tracks, terrain, rockMat: props.models.boulder_01?.meshes[0]?.mat, renderer, sun });
+await volcano.load();
 loadStep(0.6, 'BUILDING ASHFALL VILLAGE…');
 const village = await buildVillage(world, scene, M, quality, tracks);
 loadStep(0.72, 'STARTING PHYSICS…');
@@ -438,6 +443,7 @@ function frame(real) {
   dust.update(t);
   crashFx.update(t, dt);
   ambient.update(t, dt, camera.position);
+  volcano.update(t, dt, camera.position, race);
   props.update?.(t);
   // shadow frustum follows the focus point, texel-snapped to stop shimmering
   const texel = (sc.right - sc.left) / sunLight.shadow.mapSize.x;
@@ -476,6 +482,11 @@ if (params.has('race')) {
     // ?lava=N sets Eruption's lava flow running N m behind the truck, for screenshots
     const er = race.hazards?.erupt;
     if (er && params.has('lava')) Object.assign(er.flow, { state: 'run', runT: 9, front: race.player.i - +params.get('lava') }).mesh.visible = true;
+    // ?craters lays a row of test craters (radius 0.6 to 5 m) on the road ahead, for screenshots
+    if (params.has('craters')) [0.6, 1.2, 2, 3, 4.5].forEach((R, k) => {
+      const g = race.track.frame(race.player.i + 14 + k * 12), lat = (k % 2 ? 1 : -1) * 2.5;
+      race.hazards.craters.add(new THREE.Vector3(g.x + g.nx * lat, 0, g.z + g.nz * lat), R, R * 0.18, race.player.i + 14 + k * 12);
+    });
     // ?ram=N launches the truck straight ahead at N m/s, for crash tests
     if (params.has('ram')) {
       const sp = +params.get('ram');
@@ -495,7 +506,7 @@ if (still) {
   window.__state = race && { fxn: [crashFx.smoke.i, crashFx.fire.i, crashFx.spark.i, crashFx.time, t], t: race.t, done: race.done, player: race.positionOf(race.player),
     order: race.order.map((c) => ({ name: c.v.name, dist: Math.round(c.dist), lap: c.lap, fin: c.finished, dnf: !!c.dnf, time: c.time && +c.time.toFixed(1), resp: (c.respLog || []).join(' '),
       dmg: +(c.v.damage?.level || 0).toFixed(2), lost: [...(c.v.damage?.lost || [])].join(','), blown: !!c.v.damage?.blown, log: (c.v.damage?.log || []).join(' ') })),
-    hz: race.hazards && { bombs: race.hazards.bombs.length, marks: race.hazards.marks.length, boulders: race.hazards.boulders.length, rolled: race.hazards.nBoulders || 0, dropped: race.hazards.nBombs || 0, lava: race.hazards.lava?.state, hits: race.hazards.hits || 0 },
+    hz: race.hazards && { craters: race.hazards.craters.list.length, bombs: race.hazards.bombs.length, marks: race.hazards.marks.length, boulders: race.hazards.boulders.length, rolled: race.hazards.nBoulders || 0, dropped: race.hazards.nBombs || 0, lava: race.hazards.lava?.state, hits: race.hazards.hits || 0 },
     er: race.hazards?.erupt && { flow: race.hazards.erupt.flow.state, front: Math.round(race.hazards.erupt.flow.front), heaves: race.hazards.erupt.heaves.map((h) => `${h.i0}:${h.state}`).join(' '),
       fiss: race.hazards.erupt.fissures.length, rocks: race.track.obstacles.map((o) => o.i).join(','), leapt: race.cars.filter((c) => c.leapt).length,
       burned: (race.hazards.erupt.flow.log || []).join(' '), erupting: !!race.hazards.erupt.erupting },
@@ -516,6 +527,7 @@ function frameNoRender(real) {
   if (LOOK) camera.position.set(LOOK[0], LOOK[1], LOOK[2]);
   crashFx.update(t, dt);
   ambient.update(t, dt, camera.position);
+  volcano.update(t, dt, camera.position, race);
 }
 
 // frame cap: browser and phone builds default to 30 fps, the desktop app runs uncapped

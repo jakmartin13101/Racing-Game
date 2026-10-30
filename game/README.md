@@ -48,6 +48,12 @@ All around the tracks the world is alive: the lava rivers run visibly down the m
 middle and where it is steep), smoking and spitting molten gobs; the lava lake and the crater pool bubble and
 burst; steam vents hiss on the cone; birds wheel over the plain; and dry grass, shrubs and trees move in the
 wind. The ground has erosion gullies down the slopes, grit and loose stones, and the roads have potholes.
+Cooled lava crust lines the river banks, its seams still glowing near the flow; obsidian chips glint; scoria
+and cinder fields, charred snags and fallen logs dress the cone; embers rise off the lava and ash drifts down.
+
+Volcanic bombs dig craters where they land, sized by the rock and how fast it came down, with a raised rim and
+a splash of thrown earth; the floor glows for a while. They stay for the whole race, and a truck bucks over the
+rim. A rock skips one to five times after it hits, each hop lower, then rolls to a stop.
 
 The browser and phones cap at 30 fps and default to lighter graphics; the desktop app runs uncapped at high.
 
@@ -90,7 +96,7 @@ Cameras: chase, far chase, hood, bumper and trackside TV.
 `tools/truck/split.py` cuts the breakable parts out of the baked truck models.
 
 URL options: `?race=caldera|village|summit|eruption`, `&ai=N`, `&laps=N`, `&diff=easy|normal|hard`, `&cam=...`,
-`?q=low|medium|high|ultra`, `?sub=N` (physics substeps), `?nofog`, `?noshafts`, `?nodof`, `?noskid`, `?fps=N`, `?auto` (autopilot), `?blow` (force an engine blow), `?at=N&yaw=R&ram=V` (crash test), `?lava=N` (Eruption: start the lava N m behind the truck placed with `at`), `?trace` (log truck progress), `?look=x,y,z,tx,ty,tz` (a fixed camera, for scenery shots), `?still=N` (render one frame after N simulated steps,
+`?q=low|medium|high|ultra`, `?sub=N` (physics substeps), `?nofog`, `?noshafts`, `?nodof`, `?noskid`, `?fps=N`, `?auto` (autopilot), `?blow` (force an engine blow), `?at=N&yaw=R&ram=V` (crash test), `?lava=N` (Eruption: start the lava N m behind the truck placed with `at`), `?trace` (log truck progress), `?look=x,y,z,tx,ty,tz` (a fixed camera, for scenery shots), `?craters` (a row of test craters ahead), `?still=N` (render one frame after N simulated steps,
 used for headless captures).
 
 ## Code

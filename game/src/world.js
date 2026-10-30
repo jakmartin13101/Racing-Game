@@ -132,6 +132,9 @@ export function buildTerrain(world, M, quality) {
   ntex.magFilter = THREE.LinearFilter; ntex.minFilter = THREE.LinearMipmapLinearFilter;
   ntex.generateMipmaps = true; ntex.needsUpdate = true;
   const mask = loader.load(`${BASE}world/masks.png`);
+  // rows of the bake run along +z like the heightfield; an image texture's default flipY would mirror the lava
+  // glow, burn and road masks to the wrong side of the map
+  mask.flipY = false;
 
   const mat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, envMapIntensity: 0.7 });
   const uniforms = {
@@ -141,7 +144,7 @@ export function buildTerrain(world, M, quality) {
     basA: { value: M.bas.a }, basP: { value: M.bas.p },
     tDetail: { value: M.detail },
     brA: { value: M.burnt.a }, brP: { value: M.burnt.p },
-    uExtent: { value: extent },
+    uExtent: { value: extent }, uTime: { value: 0 },
   };
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, uniforms);
@@ -153,9 +156,27 @@ export function buildTerrain(world, M, quality) {
 varying vec3 vW;
 // 12 samplers here + shadow map + environment stays within the common 16-unit limit
 uniform sampler2D tNH, tMask, ashA, ashP, scoA, scoP, basA, basP, tDetail, brA, brP;
-uniform float uExtent;
+uniform float uExtent, uTime;
 ${GLSL_COMMON}
-vec3 gN; float gAO; vec3 gEm;`)
+vec3 gN; float gAO; vec3 gEm; float gGloss;
+// thin lines where a noise channel crosses its median: a network of cracks, antialiased by its own derivative
+float seamLine(float n) { return 1.0 - smoothstep(0.0, fwidth(n) * 1.5 + 0.006, abs(n - 0.53)); }
+// noise stretched along a fixed direction d (s = 1 / (metres across, metres along)), with explicit gradients so
+// the mip level stays put where the caller switches directions
+vec4 alongDir(vec2 d, vec2 s, vec2 o) {
+  vec2 pr = vec2(-d.y, d.x), dx = dFdx(vW.xz), dy = dFdy(vW.xz);
+  return textureGrad(tNoise, vec2(dot(vW.xz, pr), dot(vW.xz, d)) * s + o, vec2(dot(dx, pr), dot(dx, d)) * s, vec2(dot(dy, pr), dot(dy, d)) * s);
+}
+// ...blended between the two nearest of 16 fixed directions round the fall line f. (Rotating the world position
+// by f itself swings the lookup hundreds of texels wherever f bends, far from the origin, and the slopes come
+// out in woodgrain contour rings.)
+float fallW; vec2 fallD0, fallD1;
+void fallDirs(vec2 f) {
+  float a = atan(f.y, f.x + 1e-5) / 0.3927, k = floor(a);
+  fallW = a - k;
+  fallD0 = vec2(cos(k * 0.3927), sin(k * 0.3927)); fallD1 = vec2(cos((k + 1.0) * 0.3927), sin((k + 1.0) * 0.3927));
+}
+vec4 alongFall(vec2 s, vec2 o) { return mix(alongDir(fallD0, s, o), alongDir(fallD1, s, o), fallW); }`)
       .replace('#include <map_fragment>', /* glsl */`
 vec2 wuv = vW.xz / uExtent + 0.5;
 vec3 Ng = normalize(texture(tNH, wuv).xyz * 2.0 - 1.0);
@@ -215,9 +236,9 @@ albedo = mix(albedo, lA, wBurn * (1.0 - wRoad));
 albedo *= mix(0.75, 1.15, nz.g) * mix(0.88, 1.08, nz2.r);
 // erosion: rain and ash slides cut gullies straight down the slopes; sample the noise stretched along the fall line
 vec2 fall = normalize(Ng.xz + vec2(1e-4));
-vec2 gq = vec2(dot(vW.xz, vec2(-fall.y, fall.x)) / 16.0, dot(vW.xz, fall) / 120.0);
+fallDirs(fall);
 // (the noise is low-contrast, so stretch it out to the full range)
-float gully = clamp((texture(tNoise, gq).r * 0.6 + texture(tNoise, gq * vec2(3.1, 2.0)).g * 0.4 - 0.52) * 3.5 + 0.5, 0.0, 1.0);
+float gully = clamp((alongFall(vec2(1.0 / 16.0, 1.0 / 120.0), vec2(0.0)).r * 0.6 + alongFall(vec2(3.1 / 16.0, 2.0 / 120.0), vec2(0.0)).g * 0.4 - 0.52) * 3.5 + 0.5, 0.0, 1.0);
 float gK = smoothstep(0.06, 0.3, slope) * (1.0 - wRoad);
 albedo *= mix(1.0, mix(0.55, 1.45, smoothstep(0.3, 0.75, gully)), gK);
 // paler ash washed down the gully floors on the upper cone
@@ -229,6 +250,33 @@ albedo *= mix(1.0, mix(0.8, 1.12, nzm.r) * mix(0.92, 1.05, nzm.b), midK);
 // near: loose stones and grit speckle the ground
 float grit = texture(tNoise, vW.xz / 0.55).g;
 albedo *= mix(1.0, mix(0.72, 1.2, smoothstep(0.35, 0.8, grit)), (1.0 - smoothstep(6.0, 30.0, camD)) * 0.6);
+// cooled lava crust along the river banks and round the lake: black glassy pahoehoe with ropy folds across the
+// fall line, split into plates whose seams still glow close to the live flow (msk.r falls from 1 at the bank to 0
+// about 55 m out)
+float heat = msk.r;
+float crustK = smoothstep(0.5, 0.7, heat + (nz2.g - 0.5) * 0.35) * (1.0 - wRoad);
+float rope = alongFall(vec2(1.0 / 7.0, 1.0 / 1.1), vec2(0.4)).r;
+float skA = texture(tNoise, vW.xz / 31.0 + 0.17).r, skB = texture(tNoise, vW.xz / 12.0 + 0.61).g;
+float seam = max(seamLine(skA), seamLine(skB) * 0.7) * (1.0 - smoothstep(60.0, 160.0, camD));
+vec3 crustC = vec3(0.045, 0.04, 0.042) * mix(0.7, 1.5, rope) * mix(0.8, 1.2, nzm.g);
+albedo = mix(albedo, crustC, crustK);
+albedo *= 1.0 - seam * crustK * 0.6 * (1.0 - smoothstep(0.12, 0.3, slope));
+// (only where the crust lies flattish: top-projected cracks smear into streaks down a gorge wall)
+float seamHot = seamLine(skA) * crustK * smoothstep(0.84, 0.97, heat + (nz.b - 0.5) * 0.2) * smoothstep(0.45, 0.6, nz2.r) * (1.0 - smoothstep(0.12, 0.3, slope));
+float pulse = 0.65 + 0.35 * sin(uTime * 0.9 + skA * 25.0) * sin(uTime * 0.37 + skB * 13.0);
+// obsidian: glassy black chips strewn over the crust, the burnt ground and the upper cone, catching the sun
+float obK = max(crustK, max(wBurn, hAsh * smoothstep(0.55, 0.7, nz.b + nz2.r * 0.3))) * (1.0 - wRoad) * (1.0 - wRock);
+float obN = texture(tNoise, vW.xz / 1.6 + 0.29).g;
+float ob = smoothstep(0.79, 0.83, obN) * obK * (1.0 - smoothstep(25.0, 70.0, camD));
+albedo = mix(albedo, vec3(0.02, 0.02, 0.025), ob);
+gGloss = max(ob, crustK * (0.25 + rope * 0.25));
+// lichen on the old rock faces low down, far from the heat: pale grey-green Stereocaulon and the odd orange crust
+float lichK = wRock * (1.0 - smoothstep(0.02, 0.15, heat)) * (1.0 - smoothstep(170.0, 260.0, vW.y + nz.r * 80.0));
+float lichN = texture(tNoise, uX * 1.9).r * bw.x + texture(tNoise, uY * 1.9).r * bw.y + texture(tNoise, uZ * 1.9).r * bw.z;
+// (in scattered colonies, not a camouflage all over every face)
+float lich = smoothstep(0.64, 0.74, lichN + (nz2.b - 0.5) * 0.3) * smoothstep(0.55, 0.75, nz.g + nz2.r * 0.3) * lichK;
+vec3 lichC = mix(vec3(0.19, 0.21, 0.16), vec3(0.3, 0.2, 0.08), smoothstep(0.74, 0.8, nz2.r)) * mix(0.8, 1.1, lichN);
+albedo = mix(albedo, lichC, lich * 0.5);
 
 vec3 topN = groundN;
 topN = normalize(mix(topN, lN, wBurn * (1.0 - wRoad)));
@@ -237,17 +285,21 @@ vec3 dN = unpackN(texture(tDetail, vW.xz / 1.3));
 topN = normalize(topN + vec3(dN.xy, 0.0) * 0.35 * (1.0 - smoothstep(10.0, 40.0, camD)));
 vec3 wN = topToWorld(topN, Ng);
 wN = normalize(mix(wN, rockN, wRock));
-float gd = (texture(tNoise, gq + vec2(0.01, 0.0)).r - texture(tNoise, gq - vec2(0.01, 0.0)).r) * 3.0;
+float gd = (alongFall(vec2(1.0 / 16.0, 1.0 / 120.0), vec2(0.01, 0.0)).r - alongFall(vec2(1.0 / 16.0, 1.0 / 120.0), vec2(-0.01, 0.0)).r) * 3.0;
 wN = normalize(wN + vec3(-fall.y, 0.0, fall.x) * gd * 3.0 * gK);
 gN = wN;
 vec2 ro = mix(groundRO, bO, wRock);
 gAO = ro.r;
-// lava light bounce on nearby ground
-gEm = vec3(1.0, 0.26, 0.04) * (pow(msk.r, 6.0) * 0.1 + pow(msk.r, 14.0) * 0.8);
+// lava light bounce on nearby ground (kept low: with the mask the right way up it lights whole gorge walls)
+gEm = vec3(1.0, 0.26, 0.04) * (pow(msk.r, 6.0) * 0.04 + pow(msk.r, 14.0) * 0.2);
+gEm += vec3(1.0, 0.3, 0.05) * seamHot * pulse * 1.3;
+// the chips' own facets: each speck tilts the normal its own way, so they glint one at a time as the view moves
+wN = normalize(wN + (texture(tNoise, vW.xz / 0.21).rgb - 0.5) * 2.5 * ob);
+gN = wN;
 diffuseColor.rgb = albedo;
 `)
       // volcanic ground is matte: remap the scanned roughness so low sun doesn't glaze the plain white
-      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = clamp(0.62 + ro.g * 0.42, 0.62, 1.0);')
+      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = mix(clamp(0.62 + ro.g * 0.42, 0.62, 1.0), 0.14, gGloss);')
       .replace('#include <normal_fragment_maps>', 'normal = normalize((viewMatrix * vec4(gN, 0.0)).xyz);')
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += gEm;')
       .replace('#include <aomap_fragment>', `
@@ -259,6 +311,8 @@ reflectedLight.directDiffuse *= mix(1.0, ambientOcclusion, 0.5);`);
   mesh.receiveShadow = true;
   mesh.castShadow = false;
   mesh.frustumCulled = false;
+  // shared with the volcano dressing (src/volcano.js), which drives uTime and samples the same masks
+  mesh.userData.uniforms = uniforms;
   return mesh;
 }
 

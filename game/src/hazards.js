@@ -4,6 +4,7 @@ import { mulberry } from './world.js';
 import { Eruption } from './eruption.js';
 import { Bridge } from './bridge.js';
 import { makeSlab, Chips, crackCanvas } from './quake.js';
+import { Craters } from './crater.js';
 
 // Track action: volcanic bombs raining on the village (and the upper summit road), boulders rolling off the
 // slopes on the summit sprint, and on Caldera Loop a lava breakout after lap one with the ground heaving up
@@ -11,7 +12,7 @@ import { makeSlab, Chips, crackCanvas } from './quake.js';
 const G_HAZARD = (0x0008 << 16) | 0x0003; // hits the ground and trucks
 const G_GROUND = (0x0001 << 16) | 0xffff;
 const GRAV = 9.81;
-const tmp = new THREE.Vector3(), tq = new THREE.Quaternion();
+const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3(), tmp3 = new THREE.Vector3(), tq = new THREE.Quaternion();
 
 // lumpy rock: a subdivided icosahedron pushed about by a few sine octaves
 function rockGeometry(seed, detail = 2) {
@@ -78,6 +79,7 @@ export class Hazards {
     this.marks = [];
     this.scorchMat = new THREE.MeshBasicMaterial({ map: scorchTexture(), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 });
     this.chips = new Chips(world, this.group, this.rockMat, this.lite ? 60 : 140);
+    this.craters = new Craters({ world, track, group: this.group, M, phys, lite: this.lite });
     this.ringMat = new THREE.MeshBasicMaterial({ color: 0xff5a12, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
     // what runs where
     const id = track.id;
@@ -127,7 +129,8 @@ export class Hazards {
   }
 
   spawnBomb(race) {
-    const T = 3.0;
+    // lobs vary, high and steep or long and flat, so they come down at different speeds
+    const T = 2.4 + this.rnd() * 1.2;
     const tg = this.pickTarget(race, T);
     if (!tg) return;
     this.nBombs = (this.nBombs || 0) + 1;
@@ -139,12 +142,13 @@ export class Hazards {
     const r = big ? 0.9 + this.rnd() * 0.6 : 0.3 + this.rnd() * 0.3;
     // lobbed from the direction of the crater
     const away = tmp.set(x, 0, z).normalize();
-    const start = new THREE.Vector3(x - away.x * 170, y + 140, z - away.z * 170);
+    const reach = 120 + this.rnd() * 80, lift = 90 + this.rnd() * 80;
+    const start = new THREE.Vector3(x - away.x * reach, y + lift, z - away.z * reach);
     const vel = new THREE.Vector3((x - start.x) / T, (y + r - start.y) / T + 0.5 * GRAV * T, (z - start.z) / T);
     const body = this.phys.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(start.x, start.y, start.z).setCcdEnabled(true)
       .setLinvel(vel.x, vel.y, vel.z).setAngvel({ x: this.rnd() * 4 - 2, y: this.rnd() * 4 - 2, z: this.rnd() * 4 - 2 }));
     this.phys.createCollider(RAPIER.ColliderDesc.ball(r * 0.9).setMass(Math.min(2500, 2600 * 4 / 3 * Math.PI * r ** 3)).setFriction(0.9)
-      .setRestitution(0.15).setCollisionGroups(G_HAZARD), body);
+      .setRestitution(0).setCollisionGroups(G_HAZARD), body);
     const mat = bombMaterial(this.M.noise);
     const mesh = new THREE.Mesh(this.geos[Math.floor(this.rnd() * 4)], mat);
     mesh.scale.setScalar(r);
@@ -154,7 +158,7 @@ export class Hazards {
     const ring = new THREE.Mesh(new THREE.RingGeometry(r * 2.2, r * 2.2 + 0.35, 40).rotateX(-Math.PI / 2), this.ringMat.clone());
     ring.position.set(x, y + 0.15, z);
     this.group.add(ring);
-    this.bombs.push({ body, mesh, mat, ring, r, big, t: 0, T, landed: false, age: 0 });
+    this.bombs.push({ body, mesh, mat, ring, r, big, t: 0, T, i: tg.i, landed: false, age: 0, vPrev: new THREE.Vector3(vel.x, vel.y, vel.z) });
   }
 
   spawnBoulder(race) {
@@ -206,11 +210,13 @@ export class Hazards {
         const gy = this.world.heightAt(p.x, p.z);
         if (p.y - gy < b.r + 0.4 || b.t > b.T + 1.5) this.land(b, race, new THREE.Vector3(p.x, Math.max(p.y, gy), p.z), time);
       } else {
+        if (!b.rest) this.bounce(b, p, time);
         // cooling on the ground, still smoking
         b.mat.userData.heat.value = Math.max(0.05, 1 - b.age / 14);
         if (Math.random() < 0.15) { const c = 0.25; this.fx.smoke.emit(b.mesh.position, tmp.set(0, 0.8, 0), b.r, time, 3, c, c, c); }
         if (b.age > 30) this.remove(b);
       }
+      if (b.body) { const v = b.body.linvel(); b.vPrev.set(v.x, v.y, v.z); }
     }
     this.bombs = this.bombs.filter((b) => b.body);
     for (const r of this.boulders) {
@@ -231,7 +237,57 @@ export class Hazards {
     this.lava?.post(dt, race, time);
     this.erupt?.post(dt, race, time);
     this.chips.update(dt);
+    this.craters.update(dt);
     this.bridge?.update(time);
+  }
+
+  // a crater for a rock of radius r hitting at speed v: grows with the rock and (more weakly) with the speed,
+  // the rim thrown up about a sixth of its radius; slow hits on the bounce only dent the ground
+  crater(b, p, v, n) {
+    const R = Math.min(6, b.r * (0.35 + 2.1 * (v / 60) ** 0.6));
+    if (R < Math.max(0.45, b.r * 1.05)) return false;
+    const h = R * (0.15 + this.rnd() * 0.06) * Math.min(1, (v / 35) ** 0.5);
+    this.craters.add(tmp.set(p.x, 0, p.z).clone(), R, h, b.i);
+    // earth and broken road thrown out of it
+    const nc = Math.min(30, Math.round(R * 5));
+    for (let k = 0; k < nc; k++) {
+      const a = this.rnd() * 6.283, s = 3 + this.rnd() * 5 * Math.sqrt(R);
+      this.chips.throw(tmp.set(p.x + Math.cos(a) * R * 0.5, this.world.heightAt(p.x, p.z) + 0.3, p.z + Math.sin(a) * R * 0.5),
+        new THREE.Vector3(Math.cos(a) * s, 3 + this.rnd() * 6 * Math.sqrt(R / 2), Math.sin(a) * s), 0.08 + this.rnd() * 0.12 * R / 2);
+    }
+    return true;
+  }
+
+  // after it lands a rock skips along: each hit throws it back up a little less, and after its last bounce
+  // (one to five of them) it comes to rest. Rapier holds it on the ground; the hops are set here, from the
+  // velocity it had coming in
+  bounce(b, p, time) {
+    b.since += 1 / 60;
+    const gy = this.world.heightAt(p.x, p.z);
+    if (p.y - gy > b.r * 0.92 + 0.15 || b.vPrev.y > -0.6 || b.since < 0.1) return;
+    const n = this.world.normalAt(p.x, p.z, tmp2);
+    const vin = b.vPrev, vn = vin.dot(n), sp = vin.length();
+    if (vn > -0.6) return;
+    b.since = 0;
+    b.hits++;
+    if (b.hits > 1) {
+      this.crater(b, p, sp, n);
+      this.fx.smoke.emit(tmp.set(p.x, gy + 0.3, p.z), tmp3.set(0, 1, 0), 0.6 + b.r, time, 2, 0.3, 0.27, 0.24);
+    }
+    if (b.hits > b.nb) {
+      // done: it rolls on a little and stops (left free, so a truck can shove it aside)
+      b.rest = true;
+      b.body.setLinvel({ x: vin.x * 0.3, y: 0, z: vin.z * 0.3 }, true);
+      b.body.setLinearDamping(0.6); b.body.setAngularDamping(0.8);
+      return;
+    }
+    // each hop lower than the last; the ground takes most of the speed along it too
+    const up = Math.min(-vn * 0.4, 7.5 * 0.55 ** (b.hits - 1));
+    const keep = 0.5 + 0.1 * b.hits;
+    const vt = tmp3.copy(vin).addScaledVector(n, -vn).multiplyScalar(Math.min(keep, 8 / Math.max(1, sp)));
+    b.body.setLinvel({ x: vt.x + n.x * up, y: vt.y + n.y * up, z: vt.z + n.z * up }, true);
+    const w = b.body.angvel();
+    b.body.setAngvel({ x: w.x * 0.6 + (this.rnd() - 0.5) * 3, y: w.y * 0.6, z: w.z * 0.6 + (this.rnd() - 0.5) * 3 }, true);
   }
 
   land(b, race, p, time) {
@@ -239,13 +295,19 @@ export class Hazards {
     b.age = 0;
     this.group.remove(b.ring);
     b.ring.material.dispose();
+    // the crater, from the speed it came in at; then it bounces one to five times
+    const sp = b.vPrev.length();
+    const made = this.crater(b, p, sp);
+    b.nb = 1 + Math.floor(this.rnd() * 5); b.hits = 0; b.since = 1; b.rest = false;
+    this.bounce(b, { x: p.x, y: this.world.heightAt(p.x, p.z) + b.r * 0.5, z: p.z }, time);
     this.fx.burst(p, time, b.big ? 1.3 : 0.6);
     // dust ring
     for (let k = 0; k < (b.big ? 18 : 9); k++) {
       const a = (k / (b.big ? 18 : 9)) * 6.283;
       this.fx.smoke.emit(p, tmp.set(Math.cos(a) * 6, 0.5, Math.sin(a) * 6), 0.8 + b.r, time, 2.2, 0.3, 0.27, 0.24);
     }
-    // scorch mark on the ground
+    // scorch mark on the ground (dents too small for a crater still blacken it)
+    if (made) return this.blast(b, race, p);
     const n = this.world.normalAt(p.x, p.z, new THREE.Vector3());
     const mark = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.scorchMat.clone());
     mark.scale.setScalar(2.5 + b.r * 4);
@@ -255,6 +317,10 @@ export class Hazards {
     this.group.add(mark);
     this.marks.push({ mesh: mark, age: 0 });
     if (this.marks.length > 30) { const m = this.marks.shift(); this.group.remove(m.mesh); m.mesh.material.dispose(); }
+    this.blast(b, race, p);
+  }
+
+  blast(b, race, p) {
     // blast: dents and a shove for any truck close by
     const R = 3 + b.r * 6;
     for (const st of race.cars) {
@@ -280,6 +346,7 @@ export class Hazards {
 
   dispose() {
     for (const b of this.bombs) this.remove(b);
+    this.craters.dispose();
     for (const r of this.boulders) if (r.body) this.phys.removeRigidBody(r.body);
     this.lava?.dispose();
     this.erupt?.dispose();

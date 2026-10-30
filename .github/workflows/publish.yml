@@ -5,7 +5,7 @@ name: Publish Gravel Riot
 
 on:
   push:
-    branches: [main, claude/project-thread-yj1rdi]
+    branches: [main, claude/project-thread-x5x21c, claude/project-thread-yj1rdi]
     paths: ['game/**', '.github/workflows/publish.yml']
   workflow_dispatch:
 

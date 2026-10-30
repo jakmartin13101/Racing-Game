@@ -1,0 +1,5 @@
+All textures here are CC0 1.0 (public domain), resized and repacked (ORM = AO, roughness, metalness).
+tin, rtin: ambientCG CorrugatedSteel007A (https://ambientcg.com/view?id=CorrugatedSteel007A), rtin mixed with Poly Haven rust_coarse_01
+pmetal: ambientCG PaintedMetal006 (https://ambientcg.com/view?id=PaintedMetal006)
+basalt: Poly Haven dark_rock_02 (https://polyhaven.com/a/dark_rock_02)
+boards: Poly Haven weathered_planks (https://polyhaven.com/a/weathered_planks), repainted

@@ -1,6 +1,7 @@
 import { PAINTS } from './vehicle.js';
 import { CAMERAS } from './camera.js';
 import { platform } from './settings.js';
+import { regionById } from './regions.js';
 
 const $ = (id) => document.getElementById(id);
 const POINTS = [10, 8, 6, 5, 4, 3, 2, 1];
@@ -124,7 +125,7 @@ export class UI {
       cv.width = 320; cv.height = 200;
       drawTrackShape(cv, t, { bg: '#1d1713', width: 5 });
       const info = document.createElement('div');
-      info.innerHTML = `<b>${t.name}</b><span>${t.closed ? 'Circuit' : 'Sprint'} · ${(t.n / 1000).toFixed(1)} km</span>`;
+      info.innerHTML = `<b>${t.name}</b><span>${regionById(t.region || 'volcano').name} · ${t.closed ? 'Circuit' : 'Sprint'} · ${(t.n / 1000).toFixed(1)} km</span>`;
       b.append(cv, info);
       b.onclick = () => { this.quick.track = t.id; this.quick.laps = t.laps; this.refreshQuick(); };
       cards.append(b);

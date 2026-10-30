@@ -1,0 +1,6 @@
+Metal Jerrycan (metal_jerrycan)
+Source: https://polyhaven.com/a/metal_jerrycan
+Author(s): Sean Buckley
+License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
+Type: model
+Files: metal_jerrycan_2k.gltf, textures/metal_jerrycan_nor_gl_2k.jpg, textures/metal_jerrycan_diff_2k.jpg, textures/metal_jerrycan_arm_2k.jpg, metal_jerrycan.bin

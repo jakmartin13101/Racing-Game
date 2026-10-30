@@ -1,0 +1,6 @@
+Wine Barrel 01 (wine_barrel_01)
+Source: https://polyhaven.com/a/wine_barrel_01
+Author(s): James Ray Cock
+License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
+Type: model
+Files: wine_barrel_01_2k.gltf, textures/wine_barrel_01_arm_2k.jpg, wine_barrel_01.bin, textures/wine_barrel_01_nor_gl_2k.jpg, textures/wine_barrel_01_diff_2k.jpg

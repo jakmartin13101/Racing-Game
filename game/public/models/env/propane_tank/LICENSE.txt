@@ -1,0 +1,6 @@
+Propane Tank (propane_tank)
+Source: https://polyhaven.com/a/propane_tank
+Author(s): Slinc
+License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
+Type: model
+Files: propane_tank_2k.gltf, textures/propane_tank_nor_gl_2k.jpg, textures/propane_tank_diff_2k.jpg, textures/propane_tank_arm_2k.jpg, propane_tank.bin

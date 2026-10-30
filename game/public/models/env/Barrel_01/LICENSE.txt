@@ -1,0 +1,6 @@
+Barrel_01 (Barrel_01)
+Source: https://polyhaven.com/a/Barrel_01
+Author(s): Jorge Camacho
+License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
+Type: model
+Files: Barrel_01_2k.gltf, Barrel_01.bin, textures/Barrel_01_explosive_arm_2k.jpg, textures/Barrel_01_explosive_diff_2k.jpg, textures/Barrel_01_explosive_nor_gl_2k.jpg

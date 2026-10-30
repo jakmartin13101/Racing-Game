@@ -1,0 +1,6 @@
+Island Tree 01 (island_tree_01)
+Source: https://polyhaven.com/a/island_tree_01
+Author(s): Rob Tuytel, Rico Cilliers
+License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
+Type: model
+Files: island_tree_01_2k.gltf, textures/island_tree_01_nor_gl_2k.jpg, textures/island_tree_01_diff_2k.jpg, textures/island_tree_01_arm_2k.jpg, textures/island_tree_01_leaves_nor_gl_2k.jpg, textures/island_tree_01_leaves_diff_2k.jpg, textures/island_tree_01_leaves_arm_2k.jpg, textures/island_tree_01_branches_nor_gl_2k.jpg, textures/island_tree_01_branches_diff_2k.jpg, textures/island_tree_01_branches_arm_2k.jpg, island_tree_01.bin

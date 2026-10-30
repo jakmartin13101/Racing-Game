@@ -1,0 +1,6 @@
+Dry Branches Medium 01 (dry_branches_medium_01)
+Source: https://polyhaven.com/a/dry_branches_medium_01
+Author(s): Rico Cilliers
+License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
+Type: model
+Files: dry_branches_medium_01_2k.gltf, textures/dry_branches_medium_01_nor_gl_2k.jpg, textures/dry_branches_medium_01_arm_2k.jpg, textures/dry_branches_medium_01_diff_2k.jpg, dry_branches_medium_01.bin

@@ -159,7 +159,10 @@ export async function buildIslandTerrain(world, M, quality) {
   const lowEnd = !!quality.aiLod;
   const aniso = lowEnd ? 4 : 8;
   const tNH = await bakeGroundTexture(world);
-  const biome = loader.load(`${BASE}${world.dir}/biome.png`);
+  // waited for, so the first frame (and headless stills) already shows the right ground
+  const biome = await loader.loadAsync(`${BASE}${world.dir}/biome.png`);
+  biome.premultiplyAlpha = false;
+  biome.needsUpdate = true;
   // the bake writes row 0 at the north edge (z = -half), the same way up as the normal texture
   biome.flipY = false;
   const S = { sand: kaieleSet('sand', aniso), grass: kaieleSet('grass', aniso), litter: kaieleSet('litter', aniso),

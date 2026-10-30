@@ -114,9 +114,11 @@ def meander(angle_deg, r0, r1, seed, wiggle=0.12):
 
 
 rivers = [
-    dict(path=meander(18, 150, 760, 5), w=26),    # east flow, crosses track
-    dict(path=meander(147, 150, 390, 6), w=20),   # west flow
-    dict(path=meander(262, 150, 300, 7), w=15),    # north-west thin flow
+    # east flow, crosses the Caldera Loop: it wells up from a flank fissure just above the loop (the Eruption
+    # climbs the cone above it)
+    dict(path=meander(18, 150, 760, 5), w=26, from_r=360),
+    dict(path=meander(165, 150, 355, 6), w=20),   # south-west flow, beside the Ash Ridge
+    dict(path=meander(262, 150, 172, 7), w=15),   # north-west spill under the rim
 ]
 lake_c = np.array([219.0, 601.0])
 lake_r = 70.0
@@ -125,10 +127,14 @@ lava_dist = np.full(H.shape, 1e9)
 pts_all = np.stack([X.ravel(), Z.ravel()], 1)
 for rv in rivers:
     p = rv['path']
+    w = rv['w'] * (0.7 + 0.6 * np.linspace(0, 1, len(p)))  # widens downhill
+    if 'from_r' in rv:
+        keep = np.hypot(p[:, 0], p[:, 1]) >= rv['from_r']
+        p, w = p[keep], w[keep]
+        rv['path'] = p
     tree = cKDTree(p)
     d, idx = tree.query(pts_all, distance_upper_bound=120)
     d = d.reshape(H.shape)
-    w = rv['w'] * (0.7 + 0.6 * np.linspace(0, 1, len(p)))  # widens downhill
     wi = np.where(np.isfinite(d), w[np.minimum(idx, len(p) - 1)].reshape(H.shape), 1)
     depth = 7 * (1 - ss(0.0, 1.0, d / (wi * 0.5 + 6)))
     H -= np.where(np.isfinite(d), depth, 0)
@@ -321,9 +327,11 @@ th = smooth(grade_limit(th, 0.08, True), 31, True)
 TRACKS.append(dict(id='village', name='Ashfall Village', kind='circuit', closed=True, C=C, th=th, gap=np.zeros(len(C), bool),
                    width=13.0, start=20, laps=3, bankK=8, centre=VC.tolist()))
 
-# --- Eruption: the finale. Up from the southern plain, onto the Caldera Loop and over its lava jump, off up
-# switchbacks on the north-east cone to the summit plateau, a jump right across the crater, then switchbacks
-# down the southern cone, a short run on the loop and out to a finish on the plain.
+# --- Eruption: the finale, a hill climb. Up from the southern plain onto the Caldera Loop and over its lava jump,
+# off the loop in a wide U and up three long sweeping legs of the eastern cone to the Ash Ridge, a shoulder of the
+# summit. Out along the ridge, round the teardrop at its nose and down the in-run straight to a kicker in a notch of
+# the crater rim: a ballistic jump across the lava lake onto a landing hill cut into the far rim. Then down three
+# fast legs of the north-east cone onto the loop at its high point, round the loop downhill and out to the plain.
 loop = TRACKS[0]
 LC, LT = loop['C'], loop['th']
 NL = len(LC)
@@ -338,41 +346,113 @@ def piece(ctrl):
     return C
 
 
-def legs_pts(legs, step=2.0):
-    # concentric arcs joined by semicircular hairpins (same as the sprint's serpentine)
-    return serpentine(legs, polar1(legs[0][1], legs[0][0]), step_deg=step)[1:]
+def fan(legs, step=2.0):
+    """Switchback legs whose radius changes along the leg, (from_deg, to_deg, r_from, r_to), so a climbing leg can
+    spiral in with the cone. Consecutive legs join with a semicircular hairpin beyond the end angle."""
+    pts = []
+    for k, (a0, a1, r0, r1) in enumerate(legs):
+        n = max(2, int(abs(a1 - a0) / step))
+        for t in np.linspace(0, 1, n + 1)[(1 if k else 0):]:
+            pts.append(polar1(a0 + (a1 - a0) * t, r0 + (r1 - r0) * t))
+        if k + 1 < len(legs):
+            r2 = legs[k + 1][2]
+            rc, hr = (r1 + r2) / 2, abs(r1 - r2) / 2
+            c = polar1(a1, rc)
+            radial = c / np.linalg.norm(c)
+            tang = np.array([-radial[1], radial[0]]) * (1 if a1 > a0 else -1)
+            sgn = 1 if r2 < r1 else -1
+            for th_ in np.linspace(0, math.pi, 15)[1:-1]:
+                pts.append(c + radial * sgn * hr * math.cos(th_) + tang * hr * math.sin(th_))
+    return np.array(pts)
 
 
-I_MERGE, I_DIVERGE = 175, 1325        # climb runs on the loop between these indices (incl. its lava jump)
-I_MERGE2, I_EXIT = 2690, 2765          # descent joins the loop here and leaves it for the plain
-lipR, LIP_A, LAND_A = CRATER_R + 6, -60.0, 120.0
+# the jump: from a kicker in the rim notch at LIP_A across the lava lake (off-centre, so the climb and the descent
+# each get a half of the cone) to the landing hill in the far rim at LAND_A
+RIM = CRATER_R + 6
+LIP_A, LAND_A = 125.0, -10.0
+P_LIP, P_LAND = polar1(LIP_A, RIM), polar1(LAND_A, RIM)
+CHORD = float(np.linalg.norm(P_LAND - P_LIP))
+UJ = (P_LAND - P_LIP) / CHORD           # flight direction
+NJ = np.array([-UJ[1], UJ[0]])          # across it, towards the climb side
+
+
+def ridge(s, lat):
+    """Point on the Ash Ridge: s metres back from the lip along the run-up, lat metres across it."""
+    return P_LIP - UJ * s + NJ * lat
+
+
+# design jump: launch speed and kicker angle, touchdown on a landing hill tangent to the arc
+V_JUMP, KICK_DEG, KICK_LEN = 45.0, 22.0, 44.0
+IN_TOP, IN_LOW = 559.0, 546.0           # in-run: from the teardrop at the ridge nose down to the kicker
+KICK_R = KICK_LEN / math.tan(math.radians(KICK_DEG))
+LIP_H = IN_LOW + KICK_LEN ** 2 / (2 * KICK_R)
+VX, VY = V_JUMP * math.cos(math.radians(KICK_DEG)), V_JUMP * math.sin(math.radians(KICK_DEG))
+
+
+def arc_h(x):
+    return LIP_H + VY * x / VX - 9.81 * x * x / (2 * VX * VX)
+
+
+X_TD = CHORD + 31.0                     # touchdown, past the far rim
+SLOPE_TD = VY / VX - 9.81 * X_TD / (VX * VX)
+
+# the Ash Ridge: raise a flat-topped shoulder under the out-leg, the teardrop and the in-run
+RIDGE_NOSE, RIDGE_LAT, RIDGE_W = 222.0, 18.0, 38.0
+sx, sz = X - P_LIP[0], Z - P_LIP[1]
+r_s = -(sx * UJ[0] + sz * UJ[1])
+r_l = sx * NJ[0] + sz * NJ[1]
+r_top = IN_LOW + (IN_TOP - IN_LOW) * ss(40, 200, r_s)
+r_edge = np.hypot(np.maximum(np.abs(r_l - RIDGE_LAT) - RIDGE_W, 0), np.maximum(r_s - RIDGE_NOSE, 0) * 1.4)
+rough = spectral(2.2, 8, seed=41) * 6 + spectral(2.0, 30, seed=42) * 1.5
+r_h = r_top - r_edge * (1.9 + 0.35 * spectral(2.4, 4, seed=43)) + rough * ss(0, 30, r_edge)
+r_h = np.where(r_s > 20, r_h, -1e9)
+H = np.where(r_h > H, H + (r_h - H) * ss(0, 25, r_h - H + 8), H)
+# notch the far rim for the landing hill
+f_s = sx * UJ[0] + sz * UJ[1] - CHORD
+f_l = sx * NJ[0] + sz * NJ[1]
+f_x = np.clip(CHORD + f_s, CHORD, X_TD + 40)
+f_floor = np.where(f_x < X_TD, arc_h(f_x) - 0.003 * (X_TD - f_x) ** 2, arc_h(X_TD) + SLOPE_TD * (f_x - X_TD) * 0.8)
+notch = f_floor - 4 + np.maximum(np.abs(f_l) - 14, 0) * 0.8 + np.maximum(-f_s - 4, 0) * 2.5
+H = np.where((f_s > -30) & (f_s < 80) & (np.abs(f_l) < 90), np.minimum(H, notch), H)
+
+I_MERGE, I_DIVERGE = 175, 920           # climb runs on the loop between these (incl. its lava jump)
+I_MERGE2, I_EXIT = 1380, 2765           # descent joins the loop near its high point and leaves it for the plain
 approach = piece([polar1(103, 1010), polar1(101, 900), polar1(98, 780), polar1(95, 680), polar1(92, 600), polar1(89, 568),
                   LC[I_MERGE - 40], LC[I_MERGE]])
-# leave the loop inward with a wide U-turn, then seven switchbacks up the north-east cone to the rim
-up = piece(np.vstack([[LC[I_DIVERGE]], [LC[I_DIVERGE + 10]],
-    [polar1(-69, 308), polar1(-74, 300), polar1(-78.5, 288), polar1(-79, 274), polar1(-76, 264), polar1(-72, 261)],
-    legs_pts([(262, -70, 4), (240, 4, -78), (215, -78, 4), (190, 4, -78), (166, -78, 4), (144, 4, -48)]),
-    [polar1(-55, 138), polar1(-59, 124), polar1(-60, 112), polar1(LIP_A, lipR)]]))
-gapC = piece([polar1(LIP_A, lipR), polar1(LIP_A, lipR * 0.5), [0.0, 0.0], polar1(LAND_A, lipR * 0.5), polar1(LAND_A, lipR)])
-# the landing runs out across the cinder rim in a long sweeping bend before the first switchback
-down = piece(np.vstack([[polar1(LAND_A, lipR)], [polar1(LAND_A, 112)], [polar1(LAND_A - 1.5, 128)], [polar1(LAND_A - 4.5, 142)],
-    [polar1(LAND_A - 9, 154)], [polar1(LAND_A - 14, 163)],
-    legs_pts([(170, 100, 55), (196, 55, 135), (222, 135, 55), (249, 55, 135), (277, 135, 55), (306, 55, 135),
-              (336, 135, 55), (368, 55, 135), (402, 135, 130)]),
-    [polar1(126, 430), polar1(124, 462), polar1(122, 495), LC[I_MERGE2 - 25], LC[I_MERGE2]]]))
+# off the loop inwards in a wide U, then three long legs spiralling up the eastern cone
+U_C = LC[I_DIVERGE + 14] + np.array([-38.5, -11.0])
+up = piece(np.vstack([LC[I_DIVERGE:I_DIVERGE + 15:5],
+    [U_C + 38.5 * np.array([math.cos(math.radians(f)), math.sin(math.radians(f))]) for f in range(-4, -165, -20)],
+    fan([(-10, 92, 342, 288), (92, 6, 244, 194), (6, 104, 170, 168)]),
+    [ridge(60, 38), ridge(90, 36), ridge(130, 36), ridge(165, 38), ridge(186, 43), ridge(204, 39), ridge(215, 26),
+     ridge(214, 10), ridge(204, -2), ridge(184, -6), ridge(160, -3), ridge(130, 0), ridge(90, 0), ridge(45, 0),
+     ridge(0, 0)]]))
+gapC = piece([P_LIP, P_LIP + UJ * CHORD * 0.5, P_LAND])
+# the landing hill runs on down the line of flight, then a 50 m radius right-hander into the first descending leg
+BEND_S, BEND_R = P_LAND + UJ * 50, 50.0
+BEND_H = math.atan2(UJ[1], UJ[0])
+BEND_C = BEND_S + BEND_R * np.array([math.cos(BEND_H - math.pi / 2), math.sin(BEND_H - math.pi / 2)])
+bend = [BEND_C + BEND_R * np.array([math.cos(BEND_H + math.pi / 2 - f), math.sin(BEND_H + math.pi / 2 - f)])
+        for f in np.radians(np.arange(10, 97, 10))]
+down = piece(np.vstack([[P_LAND], [P_LAND + UJ * 31], [BEND_S], bend,
+    fan([(-39.5, -95, 189, 204), (-95, -28, 238, 280), (-28, -64, 318, 321)]),
+    LC[I_MERGE2 - 24:I_MERGE2 + 1:12]]))
 out = piece([LC[I_EXIT], LC[I_EXIT + 30], polar1(104, 610), polar1(106, 680), polar1(109, 760), polar1(111, 840), polar1(113, 930), polar1(114.5, 1020), polar1(115.5, 1110)])
 segs = [('approach', approach[:-1]), ('loopA', LC[I_MERGE:I_DIVERGE]), ('up', up[:-1]), ('gap', gapC[:-1]),
         ('down', down[:-1]), ('loopB', LC[I_MERGE2:I_EXIT]), ('out', out)]
 C = np.vstack([c for _, c in segs])
 kind = np.concatenate([np.full(len(c), k) for k, (_, c) in enumerate(segs)])
-# round off the joins between pieces, then hold the shared loop sections exactly on the loop
+# round off the joins between pieces, then hold the shared loop sections, the in-run and the jump line exactly
 Cs = gaussian_filter1d(C, 3, axis=0, mode='nearest')
-shared = (kind == 1) | (kind == 5)
-Cs[shared] = C[shared]
+gi = np.where(kind == 3)[0]
+lip, land = int(gi[0]), int(gi[-1] + 1)
+exact = (kind == 1) | (kind == 5)
+exact[lip - 150:land + 60] = True
+Cs[exact] = C[exact]
 C = Cs
 ground = sample(H, C[:, 0], C[:, 1])
 th = smooth(smooth(ground, 61, False), 31, False)
-# pinned heights: the shared loop sections, the summit lip with its kicker, the crater gap and the landing
+# pinned heights: the shared loop sections, the in-run and its kicker, the flight line and the landing hill
 pin = np.zeros(len(C), bool)
 P = np.zeros(len(C))
 for k in (1, 5):
@@ -380,30 +460,59 @@ for k in (1, 5):
     lo_i = [I_MERGE, I_MERGE2][k == 5]
     pin[idx] = True
     P[idx] = LT[lo_i:lo_i + len(idx)]
-gi = np.where(kind == 3)[0]
-lip, land = gi[0], gi[-1] + 1
-plateau = float(np.median(sample(H, *polar1(LIP_A, 118)[:, None])))
-pin[lip - 45:lip] = True
-P[lip - 45:lip] = plateau + ss(0, 1, np.linspace(0, 1, 45)) * 3.2
+# in-run: from the teardrop (top of the ridge) down to the kicker, then the kicker's circular lip
+i_run = lip - 170
+xr = np.arange(i_run, lip) - lip + KICK_LEN    # metres from the start of the kicker (negative before it)
+pin[i_run:lip] = True
+P[i_run:lip] = np.where(xr < 0, IN_LOW + (IN_TOP - IN_LOW) * ss(0, 1, -xr / (170 - KICK_LEN)), IN_LOW + np.maximum(xr, 0) ** 2 / (2 * KICK_R))
 pin[gi] = True
-P[gi] = np.linspace(P[lip - 1], plateau - 1.5, len(gi))
-pin[land:land + 45] = True
-P[land:land + 45] = plateau - 1.5 - np.linspace(0, 45, 45) * 0.08
+P[gi] = arc_h(np.arange(len(gi)) * CHORD / len(gi))
+# landing hill: just under the arc before touchdown, tangent to it there, then easing out to the descent grade
+n_land = 90
+xl = CHORD + np.arange(n_land)
+land_h = np.where(xl < X_TD, arc_h(xl) - 0.003 * (X_TD - xl) ** 2, 0)
+after = xl >= X_TD
+slope = SLOPE_TD + (-0.3 - SLOPE_TD) * ss(0, 1, (xl - X_TD) / 60)
+land_h[after] = arc_h(X_TD) + np.cumsum(slope[after]) - slope[after][0]
+pin[land:land + n_land] = True
+P[land:land + n_land] = land_h
 
 
-def grade_limit_pinned(v, g, pin, P):
-    """Closest g-Lipschitz profile that passes through the pinned heights."""
+def grade_limit_pinned(v, g, pin, P, gu=None, raw=None):
+    """Closest profile within the per-row grade limits that passes through the pinned heights: each row may
+    fall by at most g and climb by at most gu (g when not given) from the one before."""
     n = len(v)
+    g = np.broadcast_to(g, (n,))
+    gu = g if gu is None else np.broadcast_to(gu, (n,))
     U = np.where(pin, P, np.inf)
     L = np.where(pin, P, -np.inf)
     for i in range(1, n):
-        U[i] = min(U[i], U[i - 1] + g)
-        L[i] = max(L[i], L[i - 1] - g)
+        if not pin[i]:
+            U[i] = min(U[i], U[i - 1] + gu[i])
+            L[i] = max(L[i], L[i - 1] - g[i])
     for i in range(n - 2, -1, -1):
-        U[i] = min(U[i], U[i + 1] + g)
-        L[i] = max(L[i], L[i + 1] - g)
+        if not pin[i]:
+            U[i] = min(U[i], U[i + 1] + g[i + 1])
+            L[i] = max(L[i], L[i + 1] - gu[i + 1])
     f = np.clip(v, L, U)
-    f = np.clip(grade_limit(f, g, False), L, U)
+    f0 = f.copy()
+    # then the closest profile inside the grade limits: mean of the upper and lower envelopes
+    up_, lo_ = f.copy(), f.copy()
+    for i in range(1, n):
+        up_[i] = min(up_[i], up_[i - 1] + gu[i])
+        lo_[i] = max(lo_[i], lo_[i - 1] - g[i])
+    for i in range(n - 2, -1, -1):
+        up_[i] = min(up_[i], up_[i + 1] + g[i + 1])
+        lo_[i] = max(lo_[i], lo_[i + 1] - gu[i + 1])
+    f = np.clip((up_ + lo_) / 2, L, U)
+    # (where the limits leave next to no slack the mean steps flat and then drops; there the clipped ground is kept)
+    if raw is not None:
+        # the descent drops at its limit from the landing hill, never levelling on the rim
+        f0 = np.where(raw, np.minimum(f0, L), f0)
+        for i in range(1, n):
+            if raw[i] and not pin[i]:
+                f0[i] = min(max(f0[i], f0[i - 1] - g[i]), f0[i - 1] + gu[i])
+        f = np.where(raw, np.clip(f0, L, U), f)
     f[pin] = P[pin]
     return f
 
@@ -415,7 +524,11 @@ dl, jl = loop_tree.query(C)
 close = (dl < 26) & ~pin & np.isin(kind, [0, 2, 4, 6])
 pin[close] = True
 P[close] = LT[jl[close]]
-th = grade_limit_pinned(th, 0.195, pin, P)
+# the climb is held to the usual road grade; the descent may run steeper (it is downhill, and the lava is coming)
+# and runs downhill all the way, with no crest to throw a truck off between the bends
+gmax = np.where(np.arange(len(C)) > land, 0.29, 0.195)
+gup = np.where(kind == 4, 0.01, gmax)
+th = grade_limit_pinned(th, gmax, pin, P, gup, kind == 4)
 # smooth the free road, fading the smoothing out towards the pinned stretches so the joins stay exact
 near = np.convolve(pin.astype(float), np.ones(31) / 31, mode='same')
 th = th + (smooth(th, 21, False) - th) * np.clip(1 - near * 3, 0, 1) * ~pin
@@ -429,11 +542,12 @@ for j in lg:
 skip = np.zeros(len(C), bool)
 skip[gi] = True
 segstart = {name: int(np.where(kind == k)[0][0]) for k, (name, _) in enumerate(segs)}
+leap = dict(v=V_JUMP, angle=KICK_DEG, td=int(land + X_TD - CHORD), lipH=round(LIP_H, 3))
 TRACKS.append(dict(id='eruption', name='Eruption', kind='sprint', closed=False, C=C, th=th, gap=gapE, skip=skip,
-                   width=13.0, start=20, laps=1, bankK=10, runout=180, segs=segstart, lip=int(lip), land=int(land),
-                   loopJump=int(segstart['loopA'] + loop['jump'] - I_MERGE),
+                   width=13.0, start=20, laps=1, bankK=10, runout=180, segs=segstart, lip=lip, land=land, leap=leap,
+                   runup=int(i_run), loopJump=int(segstart['loopA'] + loop['jump'] - I_MERGE),
                    shared=[[segstart['loopA'], segstart['up']], [segstart['loopB'], segstart['out']]]))
-print('  eruption pieces', segstart, 'lip', lip, 'land', land)
+print('  eruption pieces', segstart, 'lip', lip, 'land', land, 'leap', leap)
 
 for t in TRACKS:
     t['T'], t['N'], curv = frames(t['C'], t['closed'])
@@ -591,7 +705,7 @@ def track_json(t):
             out[k] = int(t[k])
     if 'centre' in t:
         out['villageCentre'] = t['centre']
-    for k in ('segs', 'lip', 'land', 'loopJump', 'shared', 'runout'):
+    for k in ('segs', 'lip', 'land', 'loopJump', 'shared', 'runout', 'leap', 'runup'):
         if k in t:
             out[k] = t[k]
     return out

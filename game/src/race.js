@@ -144,7 +144,8 @@ export class Race {
       const c = t.at(near.i);
       if (near.d < t.width * 0.6 && st.v.contacts >= 3 && !c[4]) st.lastSafe = near.i;
       // lava, cliffs, far off course, or upside down for two seconds
-      if (p.y < c[1] - 6) this.respawn(st, `L${(p.y - c[1]).toFixed(0)}d${near.d.toFixed(0)}`); else if (near.d > 120) this.respawn(st, 'O');
+      // (a truck falling short of the crater leap is left to fall into the lake, which handles it)
+      if (p.y < c[1] - 6 && !st.leap?.short) this.respawn(st, `L${(p.y - c[1]).toFixed(0)}d${near.d.toFixed(0)}`); else if (near.d > 120) this.respawn(st, 'O');
       // upside down, or beached on its side with no wheel on the ground, for a couple of seconds
       if ((st.v.up < 0.2 || (st.v.up < 0.6 && st.v.contacts <= 1)) && st.v.speed() < 3) { st.flipT = (st.flipT || 0) + dt; if (st.flipT > 2.5) this.respawn(st, 'F'); }
       else st.flipT = 0;

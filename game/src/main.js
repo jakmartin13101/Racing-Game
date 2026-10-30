@@ -22,6 +22,7 @@ import { mulberry } from './world.js';
 const params = new URLSearchParams(location.search);
 // ?trace: every half second, each truck's row, speed and wheels down (for headless test runs)
 const TRACE = params.has('trace') ? (window.__trace = { n: 0, rows: [] }) : null;
+if (params.has('ltrace')) window.__ltrace = [];
 const SLOW = params.has('slow') ? (window.__slow = { min: 1, real: 0, slowFor: 0 }) : null;
 const S = settings();
 const quality = qualityPreset();
@@ -331,7 +332,7 @@ function raceEvents() {
       else if (!me && !e.st.v.damage.blown) toast(`${e.st.v.name} is wrecked`);
     } else if (e.type === 'dnf' && me) { if (!e.st.burned) bigMsg('DNF'); }
     else if (e.type === 'leap') {
-      if (me) { leapSlow = e.leap; rig.leapShot(e.leap, world.data.crater); }
+      if (me) { leapSlow = e.leap; rig.leapShot(e.leap, world.data.crater); if (e.leap.short) bigMsg('TOO SLOW!', 3); }
       rig.bump(me ? 0.35 : 0.08);
     } else if (e.type === 'landed' && me) { if (leapSlow) leapSlow.done = true; rig.leapShot(null); rig.bump(0.3); }
     else if (e.type === 'burned') {
@@ -362,7 +363,7 @@ function simulate(dt) {
       const pin = race.player.ai ? { ...race.player.v.input, analog: true } : raw;
       if (params.has('blow') && race.clock > 1.5) { race.player.v.forceBlow = true; pin.boost = 1; pin.throttle = 1; if (race.player.v.boost > 0.12) race.player.v.boost = 0.12; }
       race.step(h, pin, S.steerAssist && !race.player.ai);
-      if (TRACE && (TRACE.n++ % 30) === 0) TRACE.rows.push(`${race.t.toFixed(1)} ` + race.cars.map((c) => `${c.i}:${c.v.speed().toFixed(0)}:${c.v.contacts}${c.leap ? 'L' : ''}`).join(' '));
+      if (TRACE && (TRACE.n++ % 30) === 0) TRACE.rows.push(`${race.t.toFixed(1)} F${race.hazards?.erupt?.flow.front.toFixed(0) ?? ""} ` + race.cars.map((c) => `${c.i}:${c.v.speed().toFixed(0)}:${c.v.contacts}${c.leap ? "L" : ""}:${(c.off ?? 0).toFixed(0)}:${(c.v.body.translation().y - race.track.at(c.i)[1]).toFixed(1)}`).join(' '));
       accum -= h;
     }
     raceEvents();

@@ -2,11 +2,12 @@ import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { mulberry } from './world.js';
 
-// Eruption, the World Race finale. The climb: the ground heaves up into ramps, fissures crack open across the
-// road, quakes shake the pack and a lava breakout floods one of the switchbacks. The top: the volcano erupts and
-// every truck that reaches the lip is flung right across the crater through fountains of lava. The descent: lava
-// pours over the rim behind the pack and chases it down, past heavy rocks lying on the road; anyone it catches
-// is burned out.
+// Eruption, the World Race finale, a hill climb. The climb: the ground heaves up into ramps and fissures crack
+// open across the road right in front of the player, quakes shake the pack and a lava breakout floods one of the
+// long legs. The top: the volcano erupts, and the in-run down the Ash Ridge throws every truck off the kicker in the
+// rim notch on a real ballistic arc across the crater, through fountains of lava, onto a landing hill built for
+// that arc. Too slow off the kicker and the arc falls short, into the lake. The descent: lava pours over the rim
+// behind the pack and chases it down, past heavy rocks lying on the road; anyone it catches is burned out.
 const GRAV = 9.81;
 const G_ROCK = (0x0008 << 16) | 0x0003; // hits the ground and trucks
 const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3(), tq = new THREE.Quaternion(), tq2 = new THREE.Quaternion();
@@ -19,18 +20,27 @@ export class Eruption {
     const t = this.t = hz.track;
     this.rnd = mulberry(4242);
     this.lip = t.lip; this.land = t.land; this.seg = t.segs;
+    // the design jump the landing hill was shaped for: launch speed (m/s), kicker angle (deg), touchdown row
+    this.jump = t.leap || { v: 34, angle: 12, td: this.land + 10 };
+    this.td = this.jump.td;
     this.crater = hz.world.data.crater || { x: 0, z: 0, r: 88, y: hz.world.heightAt(0, 0) + 6 };
     this.env = 0;
     this.quakeT = 6;
     this.fissures = [];
-    // ground that heaves into ramps on the climb; the third floods with lava behind its ramp
+    // ground that heaves up into ramps on the climb, one on each long leg; the second floods with lava behind its
+    // ramp. Each goes off when the player is about two seconds short of it, so it happens fast and on screen.
     const up0 = this.seg.up, upN = this.lip - up0;
-    const spots = [[260, 470, false], [up0 + upN * 0.12, up0 + upN * 0.3, false], [up0 + upN * 0.42, up0 + upN * 0.6, true],
-      [up0 + upN * 0.7, up0 + upN * 0.86, false]];
+    const spots = [[260, 470, false], [up0 + upN * 0.14, up0 + upN * 0.3, false], [up0 + upN * 0.38, up0 + upN * 0.52, true],
+      [up0 + upN * 0.6, up0 + upN * 0.72, false]];
     this.heaves = spots.map(([a, b, lava]) => {
       const i0 = this.straight(Math.round(a), Math.round(b));
-      return makeHeave({ i0, lava, spread: 4, event: lava ? 'breakout' : 'heave',
-        trigger: (race) => race.cars.some((c) => !c.finished && i0 - c.i > 0 && i0 - c.i < (c.isPlayer ? 230 : 110)) });
+      return makeHeave({ i0, lava, spread: 4, event: lava ? 'breakout' : 'heave', rise: 0.75, flood: 1.6,
+        trigger: (race) => {
+          const pl = race.player, d = i0 - pl.i;
+          if (!pl.finished && d > 0 && d < 22 + pl.v.speed() * 2.1) return true;
+          // with the player far behind, the leaders set it off themselves (out of sight anyway)
+          return pl.i < i0 - 400 && race.cars.some((c) => !c.isPlayer && !c.finished && i0 - c.i > 0 && i0 - c.i < 70);
+        } });
     });
     this.fountains = new Fountains(hz, this.crater, hz.lite);
     // the crater glows from below
@@ -66,13 +76,13 @@ export class Eruption {
       hz.events.push({ type: 'erupt' });
     }
     this.glow.intensity = (this.erupting ? 30000 : 12000) * (0.85 + 0.15 * Math.sin(time * 2.3) * Math.sin(time * 0.7));
-    // quakes on the climb, opening fissures across the road ahead of the player
+    // quakes on the climb, ripping fissures open across the road just ahead of the player, in plain view
     if (race.clock > 2 && pl.i < this.lip - 60 && !pl.finished) {
       this.quakeT -= dt;
       if (this.quakeT <= 0) {
-        this.quakeT = 7 + this.rnd() * 5 - this.env * 4;
-        hz.events.push({ type: 'quake', k: 0.12 + this.env * 0.25 });
-        const i = pl.i + 45 + Math.round(this.rnd() * 60);
+        this.quakeT = 4.5 + this.rnd() * 3 - this.env * 2;
+        hz.events.push({ type: 'quake', k: 0.16 + this.env * 0.3 });
+        const i = pl.i + Math.round(18 + pl.v.speed() * (0.9 + this.rnd() * 0.6));
         if (i < this.lip - 60 && !t.c[t.wrap(i)][4] && this.heaves.every((h) => Math.abs(h.i0 - i) > 30)) this.fissure(i, time);
       }
     }
@@ -83,20 +93,37 @@ export class Eruption {
     this.flow.pre(dt, race, time);
   }
 
+  // off the kicker. A truck at (or near) the design speed flies the design arc: the kicker angle, gravity, and
+  // a touchdown tangent to the landing hill. Well short of it and it flies its own, shorter arc into the lake.
   launch(st, race, time) {
-    const t = this.t, b = st.v.body, p = b.translation();
+    const t = this.t, b = st.v.body, p = b.translation(), J = this.jump;
     const f0 = t.frame(this.lip);
     const lat = clamp((p.x - f0.x) * f0.nx + (p.z - f0.z) * f0.nz, -4, 4);
-    const k = this.land + 10;
-    const fl = t.frame(k);
-    const to = new THREE.Vector3(fl.x + fl.nx * lat, t.at(k)[1] + 0.9, fl.z + fl.nz * lat);
     const from = new THREE.Vector3(p.x, p.y, p.z);
-    const D = Math.hypot(to.x - from.x, to.z - from.z);
-    const vh = 34, T = D / vh;
-    const vy = (to.y - from.y) / T + 0.5 * GRAV * T;
-    b.setLinvel({ x: (to.x - from.x) / T, y: vy, z: (to.z - from.z) / T }, true);
+    const ang = THREE.MathUtils.degToRad(J.angle);
+    const speed = st.v.speed();
+    const short = speed < J.v * 0.62;
+    let to, T, vx, vz, vy;
+    if (short) {
+      // its own speed, along the kicker
+      const vh = speed * Math.cos(ang);
+      vy = speed * Math.sin(ang);
+      vx = f0.tx * vh; vz = f0.tz * vh;
+      // where that arc meets the lava lake
+      const dy = from.y - this.crater.y;
+      T = (vy + Math.sqrt(vy * vy + 2 * GRAV * dy)) / GRAV;
+      to = new THREE.Vector3(from.x + vx * T, this.crater.y, from.z + vz * T);
+    } else {
+      const fl = t.frame(this.td);
+      to = new THREE.Vector3(fl.x + fl.nx * lat, t.at(this.td)[1] + 1.25, fl.z + fl.nz * lat);
+      const D = Math.hypot(to.x - from.x, to.z - from.z), vh = J.v * Math.cos(ang);
+      T = D / vh;
+      vy = (to.y - from.y) / T + 0.5 * GRAV * T;
+      vx = (to.x - from.x) / T; vz = (to.z - from.z) / T;
+    }
+    b.setLinvel({ x: vx, y: vy, z: vz }, true);
     b.setAngvel({ x: 0, y: 0, z: 0 }, true);
-    st.leap = { t: 0, T, from, to, yaw: Math.atan2(to.x - from.x, to.z - from.z), apex: from.y + vy * vy / (2 * GRAV) };
+    st.leap = { t: 0, T, from, to, short, yaw: Math.atan2(vx, vz), apex: from.y + vy * vy / (2 * GRAV) };
     st.v.ghost = true;
     this.hz.events.push({ type: 'leap', st, leap: st.leap });
     this.hz.fx.burst(from.clone().setY(from.y - 0.5), time, 1.4);
@@ -141,38 +168,60 @@ export class Eruption {
   post(dt, race, time) {
     const hz = this.hz;
     for (const h of this.heaves) h.post(dt, race, time);
-    // flight across the crater: steer each truck onto its arc and hold it level, so everyone lands on the far rim
+    // flight across the crater: gravity does the work, the arc is only held to its line against the small
+    // errors of the fixed step. The nose follows the flight path, as a truck's does off a big kicker, so it comes
+    // down nose first along the landing hill.
     for (const st of race.cars) {
       const L = st.leap;
-      if (st.landT > 0) { st.landT -= dt; if (st.landT <= 0) st.v.ghost = false; }
+      if (st.landT > 0) {
+        st.landT -= dt;
+        if (st.landT <= 0) st.v.ghost = false;
+        // the long-travel suspension soaks up the touchdown: no pitching over or barrel-rolling off the hill
+        else if (st.leapt) { const w = st.v.body.angvel(), k = Math.exp(-dt * 12); st.v.body.setAngvel({ x: w.x * k, y: w.y, z: w.z * k }, true); }
+      }
       if (!L) continue;
       L.t += dt;
       const b = st.v.body, p = b.translation();
       const rem = L.T - L.t;
+      if (L.short) {
+        // into the lake: a splash, and the truck is put down on the landing hill (lost time is the penalty)
+        if (p.y < this.crater.y + 1.5 || L.t > L.T + 2) {
+          hz.fx.burst(new THREE.Vector3(p.x, this.crater.y + 1, p.z), time, 1.6);
+          this.endLeap(st, false);
+          race.respawn(st, 'C');
+        }
+        continue;
+      }
       if (st.i < this.lip - 10 || L.t > L.T + 2.5) { this.endLeap(st, false); continue; }
-      if (rem > 0.25) {
+      if (rem > 0.3) {
         const vy = (L.to.y - p.y) / rem + 0.5 * GRAV * rem;
         b.setLinvel({ x: (L.to.x - p.x) / rem, y: vy, z: (L.to.z - p.z) / rem }, true);
       }
       const v = b.linvel();
-      const gy = hz.world.heightAt(p.x, p.z);
-      // suspension takes the touchdown
-      if (L.t > L.T * 0.6 && p.y - gy < 3 && v.y < -8) b.setLinvel({ x: v.x, y: -8, z: v.z }, true);
-      const pitch = -Math.atan2(v.y, Math.hypot(v.x, v.z)) * 0.45;
+      const pitch = -Math.atan2(v.y, Math.hypot(v.x, v.z)) * 0.85;
       tq.setFromAxisAngle(UP, L.yaw).multiply(tq2.setFromAxisAngle(RIGHT, pitch));
       const r = b.rotation();
-      tq2.set(r.x, r.y, r.z, r.w).slerp(tq, Math.min(1, dt * 4));
+      tq2.set(r.x, r.y, r.z, r.w).slerp(tq, Math.min(1, dt * 3));
       b.setRotation(tq2, true);
       b.setAngvel({ x: 0, y: 0, z: 0 }, true);
       if (L.t > L.T * 0.6 && st.v.contacts >= 2) this.endLeap(st, true);
     }
-    // the cinder rim bogs the trucks down after the landing, so the first bend can be made
+    if (typeof window !== 'undefined' && window.__ltrace) {
+      const st = race.player, p = st.v.body.translation(), v = st.v.body.linvel();
+      if (st.i > this.td && st.i < this.td + 140) window.__ltrace.push([race.t.toFixed(2), st.i, p.y.toFixed(1), (p.y - this.t.at(st.i)[1]).toFixed(2), (st.off ?? 0).toFixed(1), v.x.toFixed(1), v.y.toFixed(1), v.z.toFixed(1), st.v.contacts, st.leap ? 'L' : '-', st.v.up?.toFixed(2)].join(' '));
+    }
+    // the landing hill and its run-out are a deep bed of loose cinders, an arrester bed: it scrubs the speed
+    // off hard, so the bend at the bottom can be made
     for (const st of race.cars) {
-      if (st.i < this.land || st.i > this.land + 70 || st.v.contacts < 2) continue;
+      if (st.i < this.td - 6 || st.i > this.td + 95 || st.v.contacts < 2 || st.leap) continue;
       const v = st.v.body.linvel(), s = Math.hypot(v.x, v.z);
-      if (s < 22) continue;
-      const k = -st.v.body.mass() * 4 * dt / s;
+      if (s < 17) continue;
+      const k = -st.v.body.mass() * Math.min(14, (s - 17) * 0.7 + 5) * dt / s;
       st.v.body.applyImpulse({ x: v.x * k, y: 0, z: v.z * k }, true);
+      if (Math.random() < 0.5) {
+        const p = st.v.body.translation(), c = 0.32;
+        hz.fx.smoke.emit(tmp.set(p.x, p.y - 0.4, p.z), tmp2.set(-v.x * 0.15 + (Math.random() - 0.5) * 3, 2 + Math.random() * 2, -v.z * 0.15 + (Math.random() - 0.5) * 3), 1.6, time, 2.5, c, c * 0.9, c * 0.85);
+      }
     }
     for (const fs of this.fissures) {
       fs.age += dt;
@@ -406,19 +455,21 @@ totalEmissiveRadiance += vec3(1.0, 0.26, 0.04) * (0.35 + 0.9 * warm) * (0.5 + ve
       this.T += dt;
       // ...and the last of them has got clear of the rim
       const across = race.cars.every((c) => c.finished || (c.leapt && !c.leap && c.i > this.a + 120));
-      if ((across && this.T > 1.5) || this.T > 20) { this.state = 'run'; this.runT = 0; this.mesh.visible = true; this.front = this.a; eru.hz.events.push({ type: 'flow' }); (this.log ||= []).push(`start t${race.t.toFixed(0)} lead ${Math.max(...race.cars.map((c) => c.i))}`); }
+      if ((across && this.T > 1) || this.T > (race.diff.grace ?? 9)) { this.state = 'run'; this.runT = 0; this.mesh.visible = true; this.front = this.a; eru.hz.events.push({ type: 'flow' }); (this.log ||= []).push(`start t${race.t.toFixed(0)} lead ${Math.max(...race.cars.map((c) => c.i))}`); }
       return;
     }
     const i = Math.min(this.b, Math.floor(this.front));
-    // it gathers pace over the first few seconds as it spills over the rim
+    // it gathers pace over the first couple of seconds as it spills over the rim, then runs at the difficulty's
+    // share of a clean, quick truck's pace through each metre
     this.runT += dt;
-    let v = clamp(this.pace[i] * 0.7, 8, 32) * Math.min(1, 0.3 + this.runT / 4);
-    // the player gets no breathing space: more than 130 m clear and the flow speeds up to close in, unless
-    // it is already right behind someone else
+    const D = race.diff;
+    let v = clamp(this.pace[i] * (D.lava ?? 0.86), 8, 42) * Math.min(1, 0.45 + this.runT / 2.5);
+    // the player gets no breathing space: more than the difficulty's slack clear and the flow speeds up to close
+    // in, unless an opponent still racing is right ahead of it (a stopped or wrecked one is fair game)
     const alive = !pl.finished;
-    const gap = pl.i - this.front;
-    const chasing = race.cars.some((c) => !c.finished && c !== pl && c.i - this.front > 0 && c.i - this.front < 80);
-    if (alive && gap > 130 && !chasing) v *= 1 + Math.min(0.45, (gap - 130) / 150);
+    const gap = pl.i - this.front, slack = D.slack ?? 105;
+    const chasing = race.cars.some((c) => !c.finished && c !== pl && c.v.speed() > 4 && c.i - this.front > 0 && c.i - this.front < 70);
+    if (alive && gap > slack && !chasing) v *= 1 + Math.min(0.5, (gap - slack) / 120);
     this.front = Math.min(this.b + 20, this.front + v * dt);
     this.uFront.value = this.front - this.a;
     this.gapToPlayer = alive ? Math.max(0, gap) : null;
@@ -467,7 +518,8 @@ class RoadRocks {
     const hz = eru.hz, t = eru.t, W = t.width, rnd = mulberry(311);
     t.obstacles = [];
     this.list = [];
-    const a = eru.land + 160, b = eru.seg.loopB - 40, N = 18;
+    // spread over the descent legs and the run down the loop, clear of the landing run-out
+    const a = eru.td + 150, b = eru.seg.out - 40, N = 16;
     for (let k = 0; k < N; k++) {
       let i = Math.round(a + (b - a) * (k + 0.2 + rnd() * 0.6) / N);
       // not in the middle of a hairpin

@@ -31,14 +31,17 @@ Tracks share one volcano map:
   steady rain of glowing volcanic bombs, small and large. A red ring marks where each one will land.
 - **Summit Sprint** (3.2 km, point to point): switchbacks from the foothills up to the summit lookout.
   Boulders roll off the slopes, and bombs fall on the upper half.
-- **Eruption** (8.2 km, point to point, the finale): from the plain at the foot of the volcano, along the
-  Caldera Loop's flank and over its lava jump, then seven switchbacks to the crater rim. On the way up the
-  ground heaves up into ramps, quakes crack glowing fissures across the road, one switchback floods with lava
-  behind its ramp, and the sky darkens as the volcano wakes. Near the top it erupts. Every truck that reaches
-  the lip is flung right across the crater (about 190 m) through fountains of lava, and the player's leap
-  plays in slow motion with its own camera shots. On the far side lava pours over the rim behind the pack
-  and chases it down nine switchbacks to the finish on the plain; heavy rocks lie on the road, and a truck
-  the lava catches is burned out (DNF). The HUD shows how far back the lava is.
+- **Eruption** (6.4 km, point to point, the finale): from the plain at the foot of the volcano, along the
+  Caldera Loop's flank and over its lava jump, then a hill climb up the cone: three long sweeping legs and
+  a run out along Ash Ridge. On the way up the ground heaves into ramps right in front of you, quakes crack
+  glowing fissures across the road just ahead, one ramp floods with lava behind it, and the sky darkens as
+  the volcano wakes. At the top a straight downhill run-in ends in a kicker. Hit it fast and the truck is
+  flung about 175 m across the crater through fountains of lava on a real ballistic arc, landing on a
+  downslope cut to match it (the player's leap plays in slow motion with its own camera shots); too slow
+  and it drops into the lava lake. On the far side lava pours over the rim and chases the pack down the
+  descent to the finish on the plain. It runs fast on every difficulty and gives less room for a crash or
+  slowdown the harder the setting; heavy rocks lie on the road, and a truck the lava catches is burned out
+  (DNF). The HUD shows how far back the lava is.
 
 The browser and phones cap at 30 fps and default to lighter graphics; the desktop app runs uncapped at high.
 

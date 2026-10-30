@@ -3,9 +3,11 @@ import * as THREE from 'three';
 const fwd = new THREE.Vector3(), to = new THREE.Vector3(), q = new THREE.Quaternion();
 
 export const DIFFICULTY = {
-  easy: { grip: 7.5, pace: 0.86, band: 0.10, mistakes: 0.5 },
-  normal: { grip: 9.0, pace: 0.95, band: 0.07, mistakes: 0.25 },
-  hard: { grip: 10.5, pace: 1.02, band: 0.04, mistakes: 0.08 },
+  // lava, slack (Eruption): the flow's pace as a share of a clean, quick truck's, and how far clear of it the
+  // player may get before it speeds up to close in. Each step up leaves less room to lose time or crash.
+  easy: { grip: 7.5, pace: 0.86, band: 0.10, mistakes: 0.5, lava: 0.66, slack: 150, grace: 13 },
+  normal: { grip: 9.0, pace: 0.95, band: 0.07, mistakes: 0.25, lava: 0.83, slack: 105, grace: 9 },
+  hard: { grip: 10.5, pace: 1.02, band: 0.04, mistakes: 0.08, lava: 0.95, slack: 70, grace: 6 },
 };
 
 // Racing-line follower: pure pursuit for steering, a braking-distance speed plan for throttle and brake,
@@ -71,7 +73,9 @@ export class AIDriver {
 
     // speed plan: the slowest speed any corner ahead allows given our braking
     const grip = this.diff.grip * this.skill;
-    const decel = 6;
+    // braking is weaker going downhill (Eruption's descent is steep), stronger uphill
+    const grade = (t.at(t.wrap(i + 40))[1] - t.at(i)[1]) / 40;
+    const decel = THREE.MathUtils.clamp(6 + 9.81 * grade, 2.5, 8);
     const horizon = Math.min(220, 30 + spd * spd / (2 * decel));
     let target = 60;
     for (let j = 6; j < horizon; j += 3) {

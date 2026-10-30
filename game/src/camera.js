@@ -159,7 +159,9 @@ export class CameraRig {
     const dir = new THREE.Vector3(L.to.x - L.from.x, 0, L.to.z - L.from.z).normalize();
     const side = new THREE.Vector3(dir.z, 0, -dir.x);
     const shot = u < 0.32 ? 0 : u < 0.68 ? 1 : 2;
-    const cut = shot !== S.shot;
+    // the first shot eases in from the chase camera, so the take-off reads as one move; later shots are cuts
+    const cut = S.shot >= 0 && shot !== S.shot;
+    const first = S.shot < 0 || (S.shot === 0 && L.t < 0.6);
     S.shot = shot;
     let want, look, fov;
     if (shot === 0) {
@@ -179,12 +181,12 @@ export class CameraRig {
       fov = 64;
     }
     if (cut) { this.pos.copy(want); this.look.copy(look); } else {
-      this.pos.lerp(want, 1 - Math.exp(-dt * 10));
-      this.look.lerp(look, 1 - Math.exp(-dt * 14));
+      this.pos.lerp(want, 1 - Math.exp(-dt * (first ? 4 : 10)));
+      this.look.lerp(look, 1 - Math.exp(-dt * (first ? 6 : 14)));
     }
     cam.position.copy(this.pos);
     cam.lookAt(this.look);
-    cam.fov = fov; cam.updateProjectionMatrix();
+    cam.fov = cut ? fov : cam.fov + (fov - cam.fov) * (1 - Math.exp(-dt * 5)); cam.updateProjectionMatrix();
   }
 
   // terrain, buildings or rocks between a and b

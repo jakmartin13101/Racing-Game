@@ -283,7 +283,9 @@ export class Hazards {
 
 // Caldera Loop, after lap one: the ground cracks and heaves up into a slab ramp, then lava breaks out of the
 // hillside and floods across the track just past it. From then on the only way through is over the top.
-// opts (Eruption): i0 the track row, lava false for a bare heave with no flood, trigger(race) to set it off.
+// opts (Eruption): i0 the track row, lava false for a bare heave with no flood, trigger(race) to set it off,
+// rise and flood the seconds the slab takes to come up and the lava to cross (Eruption's go off right in front of
+// the player, so they are quick).
 export class LavaBreakout {
   constructor(hz, lavaGroup, opts = {}) {
     this.hz = hz;
@@ -292,6 +294,8 @@ export class LavaBreakout {
     this.withLava = opts.lava ?? true;
     this.trigger = opts.trigger || ((race) => race.cars.some((c) => c.lap >= 1));
     this.event = opts.event || 'breakout';
+    this.rise = opts.rise ?? 3;
+    this.flood = opts.flood ?? 7;
     this.state = 'idle';
     this.T = 0;
     const f = t.frame(this.i0);
@@ -396,25 +400,26 @@ if (abs(vT.y - 0.5) * 2.0 > 0.72 + edgeN * 0.3 - smoothstep(0.0, 0.2, uFront - v
       return;
     }
     this.T += dt;
-    const k = THREE.MathUtils.smoothstep(this.T, 0, 3);
+    const k = THREE.MathUtils.smoothstep(this.T, 0, this.rise);
     const { p, q } = this.pose(k);
     this.body.setNextKinematicTranslation(p);
     this.body.setNextKinematicRotation(q);
     this.slab.position.copy(p); this.slab.quaternion.copy(q);
     this.slabHeat.value = 0.35 + 0.4 * Math.exp(-this.T / 25);
     // cracking ground: dust and stone chips while it heaves
-    if (this.T < 3.5 && Math.random() < 0.6) {
+    if (this.T < this.rise + 0.5 && Math.random() < (this.rise < 2 ? 1 : 0.6)) {
       const a = (Math.random() - 0.5) * this.rampW, b = (Math.random() - 0.5) * this.rampLen;
       const f = this.f;
       const x = p.x + f.nx * a + f.tx * b, z = p.z + f.nz * a + f.tz * b;
       hz.fx.smoke.emit(new THREE.Vector3(x, hz.world.heightAt(x, z) + 0.3, z), tmp.set(Math.random() - 0.5, 1.5 + Math.random() * 2, Math.random() - 0.5), 1.1, time, 3, 0.3, 0.27, 0.23);
       if (Math.random() < 0.3) hz.fx.sparks(new THREE.Vector3(x, hz.world.heightAt(x, z) + 0.2, z), tmp.set(0, 1, 0), time, 3);
     }
-    if (this.T > 1.5 && !this.jumpOn) { this.jumpOn = true; hz.track.jumps.push(this.jump); }
+    if (this.T > this.rise * 0.5 && !this.jumpOn) { this.jumpOn = true; hz.track.jumps.push(this.jump); }
     // lava floods across from the uphill side
-    if (this.T > 2.5 && this.withLava) {
+    const t0 = this.rise * 0.83;
+    if (this.T > t0 && this.withLava) {
       this.sheet.visible = true;
-      this.front.value = THREE.MathUtils.clamp((this.T - 2.5) / 7, 0, 1.08);
+      this.front.value = THREE.MathUtils.clamp((this.T - t0) / this.flood, 0, 1.08);
       this.light.intensity = 70 * Math.min(1, this.front.value * 2) * (0.9 + 0.1 * Math.sin(time * 3));
       if (Math.random() < 0.12) {
         const u = Math.random() * Math.min(1, this.front.value), lat = this.side * (this.latMax - u * 2 * this.latMax);

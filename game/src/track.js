@@ -22,7 +22,7 @@ export class Track {
     }
     // the crater leap: launched by the eruption itself, so the AI just drives to the lip.
     // guard: a truck that crashes this close to the lip is put down on the far side
-    if (data.lip != null) this.jumps.push({ at: data.lip, speed: 0, flat: 0, land: data.land + 25, guard: 45, crater: true });
+    if (data.lip != null) this.jumps.push({ at: data.lip, speed: 0, flat: 0, land: (data.leap?.td ?? data.land + 13) + 12, guard: 45, crater: true });
     this.sharedRows = data.shared || [];
     // heading change per metre, smoothed, for AI braking and corner props
     const head = [];

@@ -366,6 +366,8 @@ function simulate(dt) {
       if (race.player.ai) race.player.ai.update(h, race.player, race.cars.map((c) => c.v), 0);
       const pin = race.player.ai ? { ...race.player.v.input, analog: true } : raw;
       if (params.has('blow') && race.clock > 1.5) { race.player.v.forceBlow = true; pin.boost = 1; pin.throttle = 1; if (race.player.v.boost > 0.12) race.player.v.boost = 0.12; }
+      // ?lose=0..3 tears that tyre off the player's truck once the race is under way (for checking the physics)
+      if (params.has('lose') && race.clock > 1 && !race.player.v.lostWheels.size) race.player.v.damage?.loseWheel(+params.get('lose'));
       race.step(h, pin, S.steerAssist && !race.player.ai);
       if (TRACE && (TRACE.n++ % 30) === 0) TRACE.rows.push(`${race.t.toFixed(1)} F${race.hazards?.erupt?.flow.front.toFixed(0) ?? ""} ` + race.cars.map((c) => `${c.i}:${c.v.speed().toFixed(0)}:${c.v.contacts}${c.leap ? "L" : ""}:${(c.off ?? 0).toFixed(0)}:${(c.v.body.translation().y - race.track.at(c.i)[1]).toFixed(1)}`).join(' '));
       accum -= h;

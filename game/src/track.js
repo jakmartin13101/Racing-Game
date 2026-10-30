@@ -17,6 +17,9 @@ export class Track {
     const jump = data.jump ?? data.loopJump;
     if (jump != null) {
       let land = jump;
+      // the jump row may be the lip just before the gap (Kai'ele) or inside it (the volcano): find the gap, then its far side
+      for (let k = 0; k < 40 && !this.at(land)[4]; k++) land = this.wrap(land + 1);
+      if (!this.at(land)[4]) land = jump;
       while (this.at(land)[4]) land = this.wrap(land + 1);
       this.jumps.push({ at: jump, speed: 38, flat: 60, land: this.wrap(land + 20) });
     }

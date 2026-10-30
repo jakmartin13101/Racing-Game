@@ -123,6 +123,8 @@ export class Race {
       if (v.damage) v.damage.kind = '';
       if (st?.isPlayer) this.events.push({ type: 'knock', name: it.name, dv });
     });
+    // grip, gusts and puddles for each truck
+    this.weather?.step(dt, this.cars);
     this.hazards?.pre(dt, this);
     // Ultra splits each step into substeps: vehicle forces and the solver run at 120 Hz
     const sub = this.substeps, h = dt / sub;

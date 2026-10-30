@@ -134,6 +134,7 @@ export function buildTerrain(world, M, quality) {
   const mask = loader.load(`${BASE}world/masks.png`);
 
   const mat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, envMapIntensity: 0.7 });
+  mat.userData.wx = 'ground'; // puddles and snow cover (weather/surface.js)
   const uniforms = {
     tNH: { value: ntex }, tMask: { value: mask }, tNoise: { value: M.noise },
     ashA: { value: M.ash.a }, ashP: { value: M.ash.p },
@@ -315,6 +316,7 @@ export function roadMaterial(M, W, len) {
   const mat = new THREE.MeshStandardMaterial({
     side: THREE.DoubleSide, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
   });
+  mat.userData.wx = 'road';
   const uniforms = {
     ashA: { value: M.ash.a }, ashP: { value: M.ash.p }, tNoise: { value: M.noise },
     tDetail: { value: M.detail }, uHalfW: { value: W / 2 }, uLen: { value: len },
@@ -406,6 +408,7 @@ export function buildLava(world, M) {
   };
   const makeMat = (flowing) => {
     const mat = new THREE.MeshStandardMaterial({ roughness: 0.8, metalness: 0 });
+    mat.userData.wx = false; // rain and snow never settle on lava
     mat.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, lavaUniforms);
       sh.vertexShader = sh.vertexShader

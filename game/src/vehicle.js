@@ -337,8 +337,10 @@ export class Vehicle {
       const eb = dead ? 7 : 3 + 5 * (this.rpm / T.redline) * (T.gears[this.gear - 1] / 1.5);
       for (let i = 0; i < 4; i++) vc.setWheelBrake(i, eb + loose * 4);
     }
-    // grip: full on the track, less on loose ash and gravel, almost none on a bare hub
-    for (let i = 0; i < 4; i++) if (!this.lostWheels?.has(i)) vc.setWheelFrictionSlip(i, T.friction * (1 - (1 - T.looseGrip) * loose));
+    // grip: full on the track, less on loose ash and gravel, almost none on a bare hub; rain, puddles and snow
+    // take some away (weatherGrip, set by the weather each step)
+    const wg = this.weatherGrip ?? 1;
+    for (let i = 0; i < 4; i++) if (!this.lostWheels?.has(i)) vc.setWheelFrictionSlip(i, T.friction * wg * (1 - (1 - T.looseGrip) * loose));
     vc.updateVehicle(dt, undefined, RAY_GROUND);
     // air drag, opposite the motion and growing with the square of the speed
     if (spd > 1) { const k = -T.drag * spd * dt; this.body.applyImpulse({ x: v.x * k, y: v.y * k * 0.3, z: v.z * k }, true); }

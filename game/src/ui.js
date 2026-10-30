@@ -1,6 +1,7 @@
 import { PAINTS } from './vehicle.js';
 import { CAMERAS } from './camera.js';
 import { platform } from './settings.js';
+import { WEATHERS, TIMES, weathersFor, timesFor } from './weather/conditions.js';
 
 const $ = (id) => document.getElementById(id);
 const POINTS = [10, 8, 6, 5, 4, 3, 2, 1];
@@ -56,7 +57,7 @@ export class UI {
     Object.assign(this, { tracks, s: settings, save, h: handlers });
     this.root = $('ui');
     this.stack = [];
-    this.quick = { track: 'caldera', laps: 2, opponents: 5, difficulty: 'normal' };
+    this.quick = { track: 'caldera', laps: 2, opponents: 5, difficulty: 'normal', weather: 'random', time: 'random' };
     this.champ = null;
     if (platform.desktopApp) document.body.classList.add('desktop');
     this.root.addEventListener('click', (e) => {
@@ -90,7 +91,7 @@ export class UI {
       case 'start-quick': {
         const t = this.quick;
         this.champ = null;
-        h.start({ track: t.track, laps: t.laps, opponents: t.opponents, difficulty: t.difficulty, paint: this.s.paint, mode: 'quick' });
+        h.start({ track: t.track, laps: t.laps, opponents: t.opponents, difficulty: t.difficulty, weather: t.weather, time: t.time, paint: this.s.paint, mode: 'quick' });
         break;
       }
       case 'start-world': {
@@ -109,7 +110,8 @@ export class UI {
 
   startRound() {
     const ev = EVENTS[this.champ.round];
-    this.h.start({ track: ev.track, laps: ev.laps, opponents: 7, difficulty: this.champ.difficulty, paint: this.s.paint, mode: 'world' });
+    // the campaign rolls its weather and time of day for every event
+    this.h.start({ track: ev.track, laps: ev.laps, opponents: 7, difficulty: this.champ.difficulty, weather: 'random', time: 'random', paint: this.s.paint, mode: 'world' });
   }
 
   // ------------------------------------------------------------ quick race
@@ -141,6 +143,9 @@ export class UI {
     step(q('laps'), 'laps', () => 1, () => (this.trackById(this.quick.track).closed ? 6 : 1));
     step(q('opponents'), 'opponents', () => 0, () => 7);
     this.seg(q('difficulty'), ['easy', 'normal', 'hard'], () => this.quick.difficulty, (v) => { this.quick.difficulty = v; });
+    // weather and time: Random, or any the track's climate allows (snow only where it can snow)
+    this.cycle(q('weather'), 'weather', () => ['random', ...weathersFor(this.trackById(this.quick.track))], (k) => (k === 'random' ? 'Random' : WEATHERS[k].label));
+    this.cycle(q('time'), 'time', () => ['random', ...timesFor(this.trackById(this.quick.track))], (k) => (k === 'random' ? 'Random' : TIMES[k].label));
     this.swatches($('paints'));
     this.refreshQuick();
   }
@@ -153,6 +158,17 @@ export class UI {
   }
 
   trackById(id) { return this.tracks.find((t) => t.id === id); }
+
+  // a ‹ value › picker over a list that can change (a value the list no longer has falls back to the first)
+  cycle(el, key, list, label) {
+    el.innerHTML = '<button aria-label="Previous">‹</button><output></output><button aria-label="Next">›</button>';
+    const [dn, out, upb] = el.children;
+    const set = (k) => { const L = list(); this.quick[key] = L.includes(k) ? k : L[0]; out.textContent = label(this.quick[key]); };
+    const move = (d) => { const L = list(); set(L[(L.indexOf(this.quick[key]) + d + L.length) % L.length]); };
+    dn.onclick = () => move(-1);
+    upb.onclick = () => move(1);
+    el._refresh = () => set(this.quick[key]);
+  }
 
   seg(el, values, get, set, labels = values) {
     el.innerHTML = '';
@@ -218,6 +234,7 @@ export class UI {
     add('Touch steering', 'Tilt uses the phone\'s motion sensor', ['buttons', 'tilt'], ['Buttons', 'Tilt'], 'touchSteer', (v) => this.h.onTouch?.(v));
     add('Auto accelerate', 'Touch: the truck drives itself forward, brake to slow', [true, false], ['On', 'Off'], 'autoGas', () => this.h.onTouch?.());
     add('Steering assist', 'Gently keeps the truck on the racing line', [true, false], ['On', 'Off'], 'steerAssist');
+    add('Rain on lens', 'Drops on the camera in the wet', [true, false], ['On', 'Off'], 'lensDrops');
     add('Show FPS', '', [true, false], ['On', 'Off'], 'showFps');
   }
 

@@ -57,6 +57,21 @@ full-resolution ambient occlusion, height fog that pools in the valleys and glow
 through the ash, depth of field, heat shimmer near lava, ultra anti-aliasing and more tyre marks, and steps
 the physics at 120 Hz instead of 60.
 
+## Weather and time of day
+
+Every race has a weather and a time of day: Sunny, Overcast, Light rain, Rain, Heavy rain, Thunderstorm, Fog,
+Snow or Blizzard, in the Morning, at Midday, in the Evening or at Night. Pick them in Quick Race (or leave them on
+Random); the World Race rolls them at random for each event. Snow only comes up where a track's climate allows it
+(none of the volcano tracks do).
+
+Rain soaks the ground dark and glossy, fills puddles that ripple under the drops, throws spray off the tyres,
+splashes on the road and beads on the camera lens; storms add forked lightning that lights the scene, thunder that
+shakes the camera, and crosswind gusts. Snow settles on everything that faces up. Fog and downpours cut the
+visibility, and at night the trucks run with headlights, light bars and brake lights under a moon and stars.
+Wet roads have less grip (down to about 70% in a storm, 55% in a blizzard), puddles less again, and mud or deep
+snow off the track slows the trucks further; the AI drivers brake earlier to match. Settings has a switch for the
+drops on the lens. How tracks plug into it is in [`src/weather/README.md`](src/weather/README.md).
+
 ## Driving physics
 
 Six-speed sequential gearbox with an rpm-based torque curve, auto shifts with a short power cut, engine
@@ -89,7 +104,7 @@ Cameras: chase, far chase, hood, bumper and trackside TV.
 
 `tools/truck/split.py` cuts the breakable parts out of the baked truck models.
 
-URL options: `?race=caldera|village|summit|eruption`, `&ai=N`, `&laps=N`, `&diff=easy|normal|hard`, `&cam=...`,
+URL options: `?race=caldera|village|summit|eruption`, `&weather=clear|cloudy|lightrain|rain|heavyrain|storm|fog|snow|blizzard`, `&time=morning|day|evening|night` (`&anywx` ignores the track's climate), `&ai=N`, `&laps=N`, `&diff=easy|normal|hard`, `&cam=...`,
 `?q=low|medium|high|ultra`, `?sub=N` (physics substeps), `?nofog`, `?noshafts`, `?nodof`, `?noskid`, `?fps=N`, `?auto` (autopilot), `?blow` (force an engine blow), `?at=N&yaw=R&ram=V` (crash test), `?lava=N` (Eruption: start the lava N m behind the truck placed with `at`), `?trace` (log truck progress), `?look=x,y,z,tx,ty,tz` (a fixed camera, for scenery shots), `?still=N` (render one frame after N simulated steps,
 used for headless captures).
 
@@ -98,7 +113,7 @@ used for headless captures).
 `src/main.js` (app state and loop), `world.js` (terrain, materials, lava), `track.js` (track geometry
 queries), `vehicle.js` (truck physics and visuals), `ai.js` (opponent drivers), `race.js` (grid, laps,
 respawns, results), `camera.js` (the TV camera checks its line of sight and moves when terrain or a building gets in the way),
-`hazards.js` (bombs, boulders, the Caldera lava breakout), `eruption.js` (Eruption's heaves, fissures, crater leap, lava fountains, lava flow and road rocks), `ultra.js` (height fog, sun shafts, depth of field, tyre marks), `damage.js`, `crash.js`, `fx.js` (smoke, fire,
+`hazards.js` (bombs, boulders, the Caldera lava breakout), `eruption.js` (Eruption's heaves, fissures, crater leap, lava fountains, lava flow and road rocks), `ultra.js` (height fog, sun shafts, depth of field, tyre marks), `weather/` (sky, time of day, rain, snow, lightning, wet surfaces, truck lights), `damage.js`, `crash.js`, `fx.js` (smoke, fire,
 motion blur), `input.js` (keyboard, gamepad, touch, tilt), `ui.js` / `ui.css` (menus,
 HUD), `settings.js` (presets and saved settings), `props.js` and `village.js` (scenery). The desktop
 wrapper is `electron/main.cjs`, and `electron/installer.nsi` builds the installer.

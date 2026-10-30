@@ -19,6 +19,8 @@ import { Input } from './input.js';
 import { UI, fmt, drawTrackShape } from './ui.js';
 import { settings, saveSettings, quality as qualityPreset, platform } from './settings.js';
 import { mulberry } from './world.js';
+import { loadTrackIndex, pickRegion, switchRegion } from './regions.js';
+import { buildKaiele, KaieleHazards } from './kaiele/region.js';
 
 const params = new URLSearchParams(location.search);
 // ?trace: every half second, each truck's row, speed and wheels down (for headless test runs)
@@ -51,7 +53,8 @@ const { sun } = await buildSky(renderer, scene);
 // Ultra: ash haze that pools in the valleys and glows towards the sun (patches shaders before any compile)
 if (ULTRA && !params.has('nofog')) patchHeightFog(sun);
 const fogColor = new THREE.Color(0.62, 0.64, 0.66), fogHot = new THREE.Color(0.5, 0.33, 0.27);
-scene.fog = new THREE.FogExp2(fogColor, 0.00028);
+const fogBase = { color: fogColor, density: 0.00028, sun: 2.8 };
+scene.fog = new THREE.FogExp2(fogColor, fogBase.density);
 
 const sunLight = new THREE.DirectionalLight(0xfff0dc, 2.8);
 sunLight.castShadow = true;
@@ -66,33 +69,45 @@ sunLight.shadow.normalBias = 0.04;
 scene.add(sunLight, sunLight.target);
 scene.add(new THREE.HemisphereLight(0x9fb2c8, 0x3a2a20, 0.1));
 
-loadStep(0.15, 'LOADING VOLCANIC REGION…');
-const world = await loadWorld();
+// one region (baked world) is loaded at a time; the menus list every region's tracks
+const trackIndex = await loadTrackIndex();
+const { region, pending } = pickRegion(params, trackIndex);
+const ISLAND = region.id === 'kaiele';
+loadStep(0.15, region.loading);
+const world = await loadWorld(region.dir);
 const tracks = world.data.tracks.map((t) => new Track(t, world));
 const trackById = (id) => tracks.find((t) => t.id === id) || tracks[0];
+const menuTracks = trackIndex.map((t) => tracks.find((x) => x.id === t.id) || t);
 const M = loadMaterials();
 loadStep(0.3, 'BUILDING TERRAIN…');
-scene.add(buildTerrain(world, M, quality));
-for (const t of tracks) scene.add(buildTrackRibbon(world, M, t));
+// Kai'ele builds its own ground, roads, sea, plants and set pieces (src/kaiele/)
+const island = ISLAND ? await buildKaiele({ renderer, scene, world, M, quality, tracks, sun, sunLight, camera, loadStep, fog: fogBase }) : null;
+if (!ISLAND) {
+  scene.add(buildTerrain(world, M, quality));
+  for (const t of tracks) scene.add(buildTrackRibbon(world, M, t));
+}
 const lava = buildLava(world, M);
 scene.add(lava);
 const plume = buildPlume(world, M, sun);
+// the plume rises over the region's own crater
+if (world.data.crater) plume.material.uniforms.uOrigin.value.set(world.data.crater.x, plume.material.uniforms.uOrigin.value.y, world.data.crater.z);
 plume.material.uniforms.uFogColor.value.copy(fogColor);
 plume.material.uniforms.uFogDensity.value = scene.fog.density;
 scene.add(plume);
 const ash = buildAsh();
+ash.visible = !ISLAND;
 scene.add(ash);
 const dust = new Dust(M, 700);
 dust.mat.uniforms.uSun.value.copy(sun);
 scene.add(dust.mesh);
-const ambient = new Ambient({ scene, world, M, quality, tracks, sun });
+const ambient = ISLAND ? island.ambient : new Ambient({ scene, world, M, quality, tracks, sun });
 loadStep(0.45, 'PLACING ROCKS AND PROPS…');
-const props = await buildProps(world, scene, M, quality, tracks);
-loadStep(0.6, 'BUILDING ASHFALL VILLAGE…');
-const village = await buildVillage(world, scene, M, quality, tracks);
+const props = ISLAND ? island.props : await buildProps(world, scene, M, quality, tracks);
+loadStep(0.6, ISLAND ? 'BUILDING THE COAST…' : 'BUILDING ASHFALL VILLAGE…');
+const village = ISLAND ? { colliders: [], handles: [] } : await buildVillage(world, scene, M, quality, tracks);
 loadStep(0.72, 'STARTING PHYSICS…');
 const phys = await initPhysics(world);
-addStaticBoxes(phys, village.colliders);
+addStaticBoxes(phys, [...village.colliders, ...(island?.colliders || [])]);
 // knock-down props, flying debris, and the smoke and fire of wrecks
 const debris = new Debris(phys);
 const breakables = new Breakables(phys, debris, [...props.handles, ...village.handles]);
@@ -176,7 +191,7 @@ const hud = {
 let mapBase = null, mapFn = null;
 
 const ui = new UI({
-  tracks, settings: S, save: saveSettings,
+  tracks: menuTracks, settings: S, save: saveSettings,
   handlers: {
     start: startRace,
     resume: () => setPaused(false),
@@ -220,6 +235,9 @@ function toMenu() {
 }
 
 function startRace(cfg) {
+  // a track in another region: reload into it
+  const other = trackIndex.find((t) => t.id === cfg.track && t.region !== region.id);
+  if (other) { switchRegion(cfg, other.region); return; }
   raceCfg = cfg;
   race?.dispose();
   skids.clear();
@@ -228,7 +246,8 @@ function startRace(cfg) {
     phys, scene, assets, track, opponents: cfg.opponents, difficulty: cfg.difficulty, laps: cfg.laps,
     playerPaint: cfg.paint ?? 0, quality, playerName: S.driver || 'YOU', seed: (cfg.seed ?? Date.now()) & 0xffff, crash,
   });
-  race.hazards = new Hazards({ phys, scene, world, track, fx: crashFx, M, lava, rockMat: props.models.boulder_01?.meshes[0]?.mat, quality, events: race.events });
+  race.hazards = ISLAND ? new KaieleHazards({ phys, scene, world, track, fx: crashFx, M, lava, island, quality, events: race.events, breakables })
+    : new Hazards({ phys, scene, world, track, fx: crashFx, M, lava, rockMat: props.models.boulder_01?.meshes[0]?.mat, quality, events: race.events });
   slowT = 0; timeScale = 1; leapSlow = null; rig.cinematic(false); rig.leapShot(null);
   hud.dmg.style.width = '0%';
   hud.msg.dataset.fin = '';
@@ -353,7 +372,7 @@ function raceEvents() {
 }
 const tmp = new THREE.Vector3();
 const focus = new THREE.Vector3();
-const menuCentre = new THREE.Vector3(-150, 0, 120);
+const menuCentre = ISLAND ? new THREE.Vector3(-300, 0, 600) : new THREE.Vector3(-150, 0, 120);
 
 function simulate(dt) {
   if (state === 'race' && race) {
@@ -417,7 +436,7 @@ function frame(real) {
     updateHud(real);
   } else {
     menuT += dt;
-    rig.orbit(dt, menuT + 40, menuCentre, 1150, 260);
+    rig.orbit(dt, menuT + 40, menuCentre, ISLAND ? 1500 : 1150, ISLAND ? 320 : 260);
     mblur.uniforms.get('uRadial').value = 0; mblur.uniforms.get('uAber').value = 0;
     blurAmt = 0.3;
     focus.set(camera.position.x * 0.5, 0, camera.position.z * 0.5);
@@ -426,8 +445,8 @@ function frame(real) {
   // Eruption: the sky closes in as the pack climbs and burns red once the volcano blows
   const envK = race?.hazards?.env ?? 0;
   scene.fog.color.copy(fogColor).lerp(fogHot, envK * 0.55);
-  scene.fog.density = 0.00028 * (1 + envK * 0.8);
-  sunLight.intensity = 2.8 * (1 - envK * 0.3);
+  scene.fog.density = fogBase.density * (1 + envK * 0.8);
+  sunLight.intensity = fogBase.sun * (1 - envK * 0.3);
   plume.material.uniforms.uFogColor.value.copy(scene.fog.color);
   plume.material.uniforms.uFogDensity.value = scene.fog.density;
   lava.userData.uniforms.uTime.value = t;
@@ -439,6 +458,7 @@ function frame(real) {
   crashFx.update(t, dt);
   ambient.update(t, dt, camera.position);
   props.update?.(t);
+  island?.update(t, dt, camera, race);
   // shadow frustum follows the focus point, texel-snapped to stop shimmering
   const texel = (sc.right - sc.left) / sunLight.shadow.mapSize.x;
   tmp.copy(focus);
@@ -483,6 +503,8 @@ if (params.has('race')) {
       race.player.v.ghost = false;
     }
   }
+} else if (pending) {
+  startRace(pending);
 } else {
   ui.show(params.get('screen') || 'title');
 }
@@ -495,7 +517,7 @@ if (still) {
   window.__state = race && { fxn: [crashFx.smoke.i, crashFx.fire.i, crashFx.spark.i, crashFx.time, t], t: race.t, done: race.done, player: race.positionOf(race.player),
     order: race.order.map((c) => ({ name: c.v.name, dist: Math.round(c.dist), lap: c.lap, fin: c.finished, dnf: !!c.dnf, time: c.time && +c.time.toFixed(1), resp: (c.respLog || []).join(' '),
       dmg: +(c.v.damage?.level || 0).toFixed(2), lost: [...(c.v.damage?.lost || [])].join(','), blown: !!c.v.damage?.blown, log: (c.v.damage?.log || []).join(' ') })),
-    hz: race.hazards && { bombs: race.hazards.bombs.length, marks: race.hazards.marks.length, boulders: race.hazards.boulders.length, rolled: race.hazards.nBoulders || 0, dropped: race.hazards.nBombs || 0, lava: race.hazards.lava?.state, hits: race.hazards.hits || 0 },
+    hz: race.hazards?.bombs && { bombs: race.hazards.bombs.length, marks: race.hazards.marks.length, boulders: race.hazards.boulders.length, rolled: race.hazards.nBoulders || 0, dropped: race.hazards.nBombs || 0, lava: race.hazards.lava?.state, hits: race.hazards.hits || 0 },
     er: race.hazards?.erupt && { flow: race.hazards.erupt.flow.state, front: Math.round(race.hazards.erupt.flow.front), heaves: race.hazards.erupt.heaves.map((h) => `${h.i0}:${h.state}`).join(' '),
       fiss: race.hazards.erupt.fissures.length, rocks: race.track.obstacles.map((o) => o.i).join(','), leapt: race.cars.filter((c) => c.leapt).length,
       burned: (race.hazards.erupt.flow.log || []).join(' '), erupting: !!race.hazards.erupt.erupting },

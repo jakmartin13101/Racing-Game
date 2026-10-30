@@ -338,7 +338,8 @@ export class Vehicle {
       for (let i = 0; i < 4; i++) vc.setWheelBrake(i, eb + loose * 4);
     }
     // grip: full on the track, less on loose ash and gravel, almost none on a bare hub
-    for (let i = 0; i < 4; i++) if (!this.lostWheels?.has(i)) vc.setWheelFrictionSlip(i, T.friction * (1 - (1 - T.looseGrip) * loose));
+    // (a region may scale grip and add drag for the surface under the truck: sand, mud, wet reef; see src/kaiele/surfaces.js)
+    for (let i = 0; i < 4; i++) if (!this.lostWheels?.has(i)) vc.setWheelFrictionSlip(i, T.friction * (1 - (1 - T.looseGrip) * loose) * (this.surfGrip ?? 1));
     vc.updateVehicle(dt, undefined, RAY_GROUND);
     // air drag, opposite the motion and growing with the square of the speed
     if (spd > 1) { const k = -T.drag * spd * dt; this.body.applyImpulse({ x: v.x * k, y: v.y * k * 0.3, z: v.z * k }, true); }
@@ -361,6 +362,7 @@ export class Vehicle {
       this.body.applyImpulse({ x: 0, y: -spd * spd * 0.9 * dt, z: 0 }, true);
       // tyres dig into loose ground
       if (loose > 0 && spd > 1) { const k = -loose * 1500 * dt / spd; this.body.applyImpulse({ x: v.x * k, y: 0, z: v.z * k }, true); }
+      if (this.surfDrag && spd > 1) { const k = -this.surfDrag * dt / spd; this.body.applyImpulse({ x: v.x * k, y: 0, z: v.z * k }, true); }
       const right = new THREE.Vector3(1, 0, 0).applyQuaternion(qq);
       const roll = right.y;
       const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(qq);

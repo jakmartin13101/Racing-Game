@@ -470,7 +470,7 @@ function frame(real) {
   lavaLight.position.copy(lp.pos);
   lavaLight.intensity = lp.strength * 120;
   // heat shimmer near lava (Ultra)
-  mblur.uniforms.get('uHaze').value = ULTRA ? Math.min(1.2, lp.strength * 1.6 + (race?.hazards?.lava?.front.value > 0 ? 0.3 : 0)) : 0;
+  mblur.uniforms.get('uHaze').value = ULTRA ? Math.min(1.2, lp.strength * 1.6 + (race?.hazards?.lava?.front?.value > 0 ? 0.3 : 0)) : 0;
   mblur.uniforms.get('uTime').value = t;
   if (shafts) shafts.update(camera);
   if (focusFx) focusFx.update(race && state !== 'menu' ? race.player.v.group.position : focus, !!rig.cine, race ? rig.mode : 'menu');

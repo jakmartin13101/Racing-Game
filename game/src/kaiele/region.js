@@ -30,6 +30,8 @@ export async function buildKaiele(ctx) {
   ctx.loadStep?.(0.36, 'FILLING THE RIVERS…');
   parts.push(buildFreshWater(ctx));
   ctx.loadStep?.(0.4, 'GROWING THE JUNGLE…');
+  // the ground mesh is at the bake's own 2 m grid near the tracks, so plants stand on the baked heights
+  world.groundAt = world.heightAt;
   const veg = await buildVegetation(ctx);
   parts.push(veg);
   const props = { handles: [], models: {}, update() {} };

@@ -137,6 +137,7 @@ body:not(.desktop) .desktop-only { display: none; }
 .seg button:focus-visible, .step button:focus-visible, .seg button.focus, .step button.focus { outline: 2px solid var(--amber-hi); }
 .step { display: flex; align-items: center; gap: 4px; }
 .step output { min-width: 2.6em; text-align: center; font-weight: 800; font-size: 20px; color: var(--amber); }
+.step.cycle output { min-width: 7.5em; text-transform: uppercase; letter-spacing: .04em; }
 .swatches { display: flex; gap: 6px; flex-wrap: wrap; }
 .swatches button { all: unset; cursor: pointer; width: 30px; height: 30px; border-radius: 50%; border: 3px solid transparent; }
 .swatches button.sel { border-color: var(--text); }

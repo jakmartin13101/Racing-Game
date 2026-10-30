@@ -72,10 +72,12 @@ export class AIDriver {
     let steer = THREE.MathUtils.clamp(-Math.atan2(cross, dot) * 2.4, -1, 1);
 
     // speed plan: the slowest speed any corner ahead allows given our braking
-    const grip = this.diff.grip * this.skill;
+    // in the wet or the snow the corners and the braking both come down with the grip
+    const wg = v.weatherGrip ?? 1;
+    const grip = this.diff.grip * this.skill * wg;
     // braking is weaker going downhill (Eruption's descent is steep), stronger uphill
     const grade = (t.at(t.wrap(i + 40))[1] - t.at(i)[1]) / 40;
-    const decel = THREE.MathUtils.clamp(6 + 9.81 * grade, 2.5, 8);
+    const decel = THREE.MathUtils.clamp(6 + 9.81 * grade, 2.5, 8) * (0.4 + 0.6 * wg);
     const horizon = Math.min(220, 30 + spd * spd / (2 * decel));
     let target = 60;
     for (let j = 6; j < horizon; j += 3) {

@@ -3,6 +3,9 @@ import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
 import { Effect, EffectAttribute } from 'postprocessing';
 import { mulberry } from './world.js';
 
+// how bright the daylight is on smoke, steam and dust (the weather dims it for night and storms)
+export const SMOKE_LIGHT = { value: new THREE.Color(1, 1, 1) };
+
 // ---------------------------------------------------------------- sky + sun + env
 // Poly Haven 'clarens_midday' HDRI drives the background, reflections and ambient light.
 export async function buildSky(renderer, scene) {
@@ -31,13 +34,15 @@ export async function buildSky(renderer, scene) {
   dome.onBeforeRender = (r, s, cam) => dome.position.copy(cam.position);
   scene.add(dome);
   const pm = new THREE.PMREMGenerator(renderer);
-  scene.environment = pm.fromEquirectangular(hdr).texture;
+  const env = pm.fromEquirectangular(hdr).texture;
+  scene.environment = env;
   scene.environmentIntensity = 0.6;
   // three's equirect lookup: u = atan(z, x) / 2pi + 0.5, v = asin(y) / pi + 0.5
   const phi = (info.u - 0.5) * Math.PI * 2;
   const el = THREE.MathUtils.degToRad(info.elev);
   const sun = new THREE.Vector3(Math.cos(phi) * Math.cos(el), Math.sin(el), Math.sin(phi) * Math.cos(el)).normalize();
-  return { sun };
+  // the weather takes over the dome for other times of day and skies
+  return { sun, dome, hdr, env, pm };
 }
 
 // ---------------------------------------------------------------- volcanic plume
@@ -63,7 +68,7 @@ export function buildPlume(world, M, sunDir) {
     uniforms: {
       uTime: { value: 0 }, tSmoke: { value: M.smoke }, uSun: { value: sunDir.clone() },
       uOrigin: { value: new THREE.Vector3(0, top, 0) }, uWind: { value: new THREE.Vector3(1, 0, 0.35).normalize() },
-      uFogColor: { value: new THREE.Color() }, uFogDensity: { value: 0 },
+      uFogColor: { value: new THREE.Color() }, uFogDensity: { value: 0 }, uLight: SMOKE_LIGHT,
     },
     vertexShader: /* glsl */`
       attribute vec4 seed;
@@ -96,7 +101,7 @@ export function buildPlume(world, M, sunDir) {
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: /* glsl */`
-      uniform sampler2D tSmoke; uniform vec3 uSun; uniform vec3 uFogColor; uniform float uFogDensity;
+      uniform sampler2D tSmoke; uniform vec3 uSun; uniform vec3 uFogColor; uniform float uFogDensity; uniform vec3 uLight;
       varying vec2 vUv; varying float vAge; varying vec3 vSeed; varying float vFogDepth; varying vec3 vRight, vUp, vFwd;
       void main() {
         vec4 s = texture2D(tSmoke, vUv);
@@ -106,7 +111,7 @@ export function buildPlume(world, M, sunDir) {
         vec3 dark = vec3(0.07, 0.065, 0.062), pale = vec3(0.55, 0.52, 0.5);
         vec3 col = mix(dark, pale, smoothstep(0.05, 0.7, vAge) * 0.55 + vSeed.x * 0.15);
         vec3 sunC = vec3(1.0, 0.86, 0.68);
-        col *= mix(vec3(0.35, 0.36, 0.42), sunC * 1.25, lit);
+        col *= mix(vec3(0.35, 0.36, 0.42), sunC * 1.25, lit) * uLight;
         // glow from the crater lights the base of the column
         col += vec3(1.0, 0.3, 0.06) * (1.0 - smoothstep(0.0, 0.02, vAge)) * 0.6;
         float a = s.a * smoothstep(0.0, 0.015, vAge) * (1.0 - smoothstep(0.5, 1.0, vAge));
@@ -184,7 +189,8 @@ export class Dust {
     for (let i = 0; i < max; i++) this.p[i * 4 + 3] = -999;
     this.mat = new THREE.ShaderMaterial({
       transparent: true, depthWrite: false,
-      uniforms: { uTime: { value: 0 }, tSmoke: { value: M.smoke }, uSun: { value: new THREE.Vector3(0, 1, 0) } },
+      uniforms: { uTime: { value: 0 }, tSmoke: { value: M.smoke }, uSun: { value: new THREE.Vector3(0, 1, 0) }, uLight: SMOKE_LIGHT,
+        uTint: { value: new THREE.Color(1, 1, 1) }, uAlpha: { value: 0.45 } },
       vertexShader: /* glsl */`
         attribute vec4 pb; attribute vec4 vs; uniform float uTime;
         varying vec2 vUv; varying float vA; varying vec3 vR, vU, vF;
@@ -203,13 +209,14 @@ export class Dust {
           gl_Position = projectionMatrix * mv;
         }`,
       fragmentShader: /* glsl */`
-        uniform sampler2D tSmoke; uniform vec3 uSun; varying vec2 vUv; varying float vA; varying vec3 vR, vU, vF;
+        uniform sampler2D tSmoke; uniform vec3 uSun, uLight, uTint; uniform float uAlpha; varying vec2 vUv; varying float vA; varying vec3 vR, vU, vF;
         void main() {
           vec4 s = texture2D(tSmoke, vUv);
           vec3 n = normalize((s.r * 2.0 - 1.0) * vR + (s.g * 2.0 - 1.0) * vU + (s.b * 2.0 - 1.0) * vF);
           float lit = clamp(dot(n, uSun) * 0.5 + 0.55, 0.0, 1.0);
-          vec3 c = vec3(0.21, 0.185, 0.165) * mix(0.45, 1.4, lit);
-          gl_FragColor = vec4(c, s.a * vA * 0.45);
+          // tinted pale for spray in the wet and powder in the snow
+          vec3 c = vec3(0.21, 0.185, 0.165) * uTint * mix(0.45, 1.4, lit) * uLight;
+          gl_FragColor = vec4(c, s.a * vA * uAlpha);
         }`,
     });
     this.mesh = new THREE.Mesh(geo, this.mat);
@@ -278,7 +285,7 @@ export class Puffs {
     const grav = kind === 'spark' ? '-9.0' : '0.0';
     this.mat = new THREE.ShaderMaterial({
       transparent: true, depthWrite: false, blending: hot ? THREE.AdditiveBlending : THREE.NormalBlending,
-      uniforms: { uTime: { value: 0 }, tTex: { value: tex }, uSun: { value: new THREE.Vector3(0, 1, 0) },
+      uniforms: { uTime: { value: 0 }, tTex: { value: tex }, uSun: { value: new THREE.Vector3(0, 1, 0) }, uLight: SMOKE_LIGHT,
         uRise: { value: kind === 'fire' ? 2.4 : kind === 'flame' ? 0.6 : kind === 'spark' ? 0 : 1.4 },
         uGrow: { value: kind === 'spark' ? 0.0 : kind === 'flame' ? 0.3 : kind === 'fire' ? 1.6 : 2.6 } },
       vertexShader: /* glsl */`
@@ -314,7 +321,7 @@ export class Puffs {
           gl_Position = vAge > 1.0 ? vec4(0.0, 0.0, -2.0, 1.0) : projectionMatrix * mv;
         }`,
       fragmentShader: /* glsl */`
-        uniform sampler2D tTex; uniform vec3 uSun; uniform float uTime;
+        uniform sampler2D tTex; uniform vec3 uSun, uLight; uniform float uTime;
         varying vec2 vUv; varying float vAge; varying vec3 vCol; varying vec3 vR, vU, vF; varying float vSeed;
         void main() {
           ${kind === 'spark' ? `
@@ -335,7 +342,7 @@ export class Puffs {
           vec3 n = normalize((s.r * 2.0 - 1.0) * vR + (s.g * 2.0 - 1.0) * vU + (s.b * 2.0 - 1.0) * vF);
           float lit = clamp(dot(n, uSun) * 0.5 + 0.55, 0.0, 1.0);
           float a = s.a * smoothstep(0.0, 0.06, vAge) * (1.0 - smoothstep(0.4, 1.0, vAge)) * 0.85;
-          gl_FragColor = vec4(vCol * mix(0.4, 1.3, lit), a);`}
+          gl_FragColor = vec4(vCol * mix(0.4, 1.3, lit) * uLight, a);`}
         }`,
     });
     this.mesh = new THREE.Mesh(geo, this.mat);

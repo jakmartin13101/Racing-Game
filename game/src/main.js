@@ -3,7 +3,9 @@ import { EffectComposer, RenderPass, EffectPass, BloomEffect, SMAAEffect, ToneMa
   VignetteEffect, NoiseEffect, BlendFunction, SMAAPreset, HueSaturationEffect, BrightnessContrastEffect } from 'postprocessing';
 import { N8AOPostPass } from 'n8ao';
 import { loadWorld, loadMaterials, buildTerrain, buildTrackRibbon, buildLava, setAniso } from './world.js';
-import { buildSky, buildPlume, buildAsh, Dust, CrashFx, MotionBlurEffect } from './fx.js';
+import { buildSky, buildPlume, buildAsh, Dust, CrashFx, MotionBlurEffect, SMOKE_LIGHT } from './fx.js';
+import { Weather } from './weather/index.js';
+import { wind } from './ambient.js';
 import { Hazards } from './hazards.js';
 import { patchHeightFog, SunShafts, Focus, SkidMarks } from './ultra.js';
 import { Debris, Breakables } from './crash.js';
@@ -47,7 +49,8 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.25, 9000);
 
 loadStep(0.05, 'LOADING SKY…');
-const { sun } = await buildSky(renderer, scene);
+const skyParts = await buildSky(renderer, scene);
+const { sun } = skyParts;
 // Ultra: ash haze that pools in the valleys and glows towards the sun (patches shaders before any compile)
 if (ULTRA && !params.has('nofog')) patchHeightFog(sun);
 const fogColor = new THREE.Color(0.62, 0.64, 0.66), fogHot = new THREE.Color(0.5, 0.33, 0.27);
@@ -64,7 +67,8 @@ if (ULTRA) sunLight.shadow.radius = 2;
 sunLight.shadow.bias = -0.0004;
 sunLight.shadow.normalBias = 0.04;
 scene.add(sunLight, sunLight.target);
-scene.add(new THREE.HemisphereLight(0x9fb2c8, 0x3a2a20, 0.1));
+const hemi = new THREE.HemisphereLight(0x9fb2c8, 0x3a2a20, 0.1);
+scene.add(hemi);
 
 loadStep(0.15, 'LOADING VOLCANIC REGION…');
 const world = await loadWorld();
@@ -102,6 +106,21 @@ const crash = { scene, debris, fx: crashFx, breakables, detail: quality.damageDe
 scene.add(camera);
 loadStep(0.8, 'LOADING TRUCKS…');
 const assets = await loadTruckAssets(renderer);
+
+// weather and time of day: the sky, light, fog, rain, snow and lightning, and wet or snowy surfaces
+const weather = new Weather({ renderer, scene, sky: skyParts, sun, sunLight, hemi, quality, heightAt: world.heightAt });
+weather.adopt(scene);
+weather.on('thunder', (e) => { if (race && state === 'race') rig.bump(Math.min(0.3, e.k * 0.35)); });
+// the sun moves with the time of day: keep everything that was lit from the old direction in step
+weather.on('change', () => {
+  plume.material.uniforms.uSun.value.copy(sun);
+  dust.mat.uniforms.uSun.value.copy(sun);
+  ambient.steam.mat.uniforms.uSun.value.copy(sun);
+  crashFx.smoke.mat.uniforms.uSun.value.copy(sun);
+  if (shafts) { shafts.sun.copy(sun); shafts.disc.material.color.setRGB(1, 0.886, 0.69).multiplyScalar(Math.min(1, weather.sunIntensity / 2.8) * (weather.T.moon ? 0 : 1)); }
+  SMOKE_LIGHT.value.copy(weather.smokeLight);
+  ash.visible = weather.W.rain < 0.5 && weather.W.snow === 0;
+});
 
 // lava light: warm fill near the camera, scaled by proximity to lava
 const lavaLight = new THREE.PointLight(0xff5a1a, 0, 45, 2);
@@ -144,6 +163,9 @@ const focusFx = ULTRA && !params.has('nodof') ? new Focus(camera) : null;
 composer.addPass(new EffectPass(camera, ...(focusFx ? [focusFx.effect] : []), bloom, ...(shafts ? [shafts.effect] : [])));
 const mblur = new MotionBlurEffect(quality.blurSamples);
 composer.addPass(new EffectPass(camera, mblur));
+// rain on the lens (its own pass: it bends the picture), skipped entirely in the dry
+const lensPass = weather.lens ? new EffectPass(camera, weather.lens) : null;
+if (lensPass) { lensPass.enabled = false; composer.addPass(lensPass); }
 composer.addPass(new EffectPass(camera, tone, grade, contrast, vignette, grain, new SMAAEffect({ preset: ULTRA ? SMAAPreset.ULTRA : SMAAPreset.MEDIUM })));
 
 addEventListener('resize', () => {
@@ -213,6 +235,7 @@ function setPaused(p) {
 function toMenu() {
   race?.dispose();
   race = null;
+  weather.setVehicles(null);
   state = 'menu';
   hud.root.hidden = true;
   touchEl.hidden = true;
@@ -228,7 +251,16 @@ function startRace(cfg) {
     phys, scene, assets, track, opponents: cfg.opponents, difficulty: cfg.difficulty, laps: cfg.laps,
     playerPaint: cfg.paint ?? 0, quality, playerName: S.driver || 'YOU', seed: (cfg.seed ?? Date.now()) & 0xffff, crash,
   });
+  race.weather = weather;
+  // weather and time: picked in Quick Race, random in the World Race; restarting keeps the same conditions
+  // (?weather=storm&time=night for testing; add &anywx to ignore the track's climate, e.g. snow on the volcano)
+  const wxTrack = params.has('anywx') ? null : track;
+  cfg.conditions ||= weather.set({ weather: cfg.weather || params.get('weather') || 'random', time: cfg.time || params.get('time') || 'random' }, wxTrack);
+  if (weather.cond !== cfg.conditions) weather.set(cfg.conditions, wxTrack);
+  weather.setVehicles(race.cars.map((c) => c.v), race.player.v);
+  for (const c of race.cars) weather.adopt(c.v.group, 'vehicle');
   race.hazards = new Hazards({ phys, scene, world, track, fx: crashFx, M, lava, rockMat: props.models.boulder_01?.meshes[0]?.mat, quality, events: race.events });
+  weather.adopt(scene);
   slowT = 0; timeScale = 1; leapSlow = null; rig.cinematic(false); rig.leapShot(null);
   hud.dmg.style.width = '0%';
   hud.msg.dataset.fin = '';
@@ -237,7 +269,7 @@ function startRace(cfg) {
   ui.hide();
   hud.root.hidden = false;
   touchEl.hidden = !S.touchUi;
-  hud.track.textContent = track.name;
+  hud.track.textContent = `${track.name} · ${weather.label}`;
   hud.lapline.style.display = track.closed ? '' : 'none';
   hud.laps.textContent = race.laps;
   hud.poscount.textContent = race.cars.length;
@@ -425,9 +457,9 @@ function frame(real) {
   if (LOOK) { camera.position.set(LOOK[0], LOOK[1], LOOK[2]); camera.up.set(0, 1, 0); camera.lookAt(LOOK[3], LOOK[4], LOOK[5]); camera.updateMatrixWorld(); }
   // Eruption: the sky closes in as the pack climbs and burns red once the volcano blows
   const envK = race?.hazards?.env ?? 0;
-  scene.fog.color.copy(fogColor).lerp(fogHot, envK * 0.55);
-  scene.fog.density = 0.00028 * (1 + envK * 0.8);
-  sunLight.intensity = 2.8 * (1 - envK * 0.3);
+  scene.fog.color.copy(weather.fogColor).lerp(fogHot, envK * 0.55 * weather.T.light);
+  scene.fog.density = weather.fogDensity * (1 + envK * 0.8);
+  sunLight.intensity = weather.sunIntensity * (1 - envK * 0.3);
   plume.material.uniforms.uFogColor.value.copy(scene.fog.color);
   plume.material.uniforms.uFogDensity.value = scene.fog.density;
   lava.userData.uniforms.uTime.value = t;
@@ -438,6 +470,9 @@ function frame(real) {
   dust.update(t);
   crashFx.update(t, dt);
   ambient.update(t, dt, camera.position);
+  weather.update(dt, t, camera, { lens: S.lensDrops !== false && !!race && state !== 'menu' && rig.mode !== 'tv' && !rig.cine && !rig.leapL, speed: race ? race.player.v.speed() : 0, dust, ambient, time: t });
+  wind.uTime.value = weather.windTime;
+  if (lensPass) lensPass.enabled = weather.lens.uniforms.get('uRain').value > 0.002 || weather.lens.uniforms.get('uSnow').value > 0.002;
   props.update?.(t);
   // shadow frustum follows the focus point, texel-snapped to stop shimmering
   const texel = (sc.right - sc.left) / sunLight.shadow.mapSize.x;
@@ -484,6 +519,7 @@ if (params.has('race')) {
     }
   }
 } else {
+  if (params.has('weather') || params.has('time')) weather.set({ weather: params.get('weather') || 'clear', time: params.get('time') || 'day' });
   ui.show(params.get('screen') || 'title');
 }
 
@@ -500,10 +536,11 @@ if (still) {
       fiss: race.hazards.erupt.fissures.length, rocks: race.track.obstacles.map((o) => o.i).join(','), leapt: race.cars.filter((c) => c.leapt).length,
       burned: (race.hazards.erupt.flow.log || []).join(' '), erupting: !!race.hazards.erupt.erupting },
     knocked: breakables.items.filter((i) => i.state !== 'static').length, props: breakables.items.length, debris: debris.list.length };
-  window.__race = race; window.__fx = crashFx; window.__skids = skids;
+  window.__race = race; window.__fx = crashFx; window.__skids = skids; window.__weather = weather; window.__frame = frame;
   window.__ready = true;
 } else {
   window.__ready = true;
+  window.__weather = weather;
   requestAnimationFrame(loop);
 }
 function frameNoRender(real) {
@@ -516,6 +553,7 @@ function frameNoRender(real) {
   if (LOOK) camera.position.set(LOOK[0], LOOK[1], LOOK[2]);
   crashFx.update(t, dt);
   ambient.update(t, dt, camera.position);
+  weather.update(dt, t, camera, { lens: S.lensDrops !== false && !!race, speed: race ? race.player.v.speed() : 0, time: t });
 }
 
 // frame cap: browser and phone builds default to 30 fps, the desktop app runs uncapped

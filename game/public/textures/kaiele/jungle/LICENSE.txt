@@ -1,0 +1,2 @@
+CC0 1.0 (public domain). Derived from Poly Haven textures: corrugated_iron, rust_coarse_01, rusty_metal_02,
+red_brick_03, weathered_planks, dark_rock (https://polyhaven.com/textures). Downscaled and packed for Gravel Riot.

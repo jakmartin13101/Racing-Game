@@ -46,7 +46,7 @@ export async function buildKaiele(ctx) {
   return {
     props, colliders, events,
     ambient: { update() {} },
-    ownBridges: new Set(),
+    ownBridges: new Set(['wailele']),
     wetness: (p, track, i) => ocean.wetness(p, track, i),
     update(t, dt, camera, race) { for (const p of parts) p.update?.(t, dt, camera, race); },
   };

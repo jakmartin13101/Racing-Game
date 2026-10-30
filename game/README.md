@@ -90,10 +90,13 @@ Cameras: chase, far chase, hood, bumper and trackside TV.
 `tools/truck/split.py` cuts the breakable parts out of the baked truck models.
 
 URL options: `?race=caldera|village|summit|eruption`, `&ai=N`, `&laps=N`, `&diff=easy|normal|hard`, `&cam=...`,
-`?q=low|medium|high|ultra`, `?sub=N` (physics substeps), `?nofog`, `?noshafts`, `?nodof`, `?noskid`, `?fps=N`, `?auto` (autopilot), `?blow` (force an engine blow), `?at=N&yaw=R&ram=V` (crash test), `?lava=N` (Eruption: start the lava N m behind the truck placed with `at`), `?trace` (log truck progress), `?look=x,y,z,tx,ty,tz` (a fixed camera, for scenery shots), `?still=N` (render one frame after N simulated steps,
+`?q=low|medium|high|ultra`, `?sub=N` (physics substeps), `?nofog`, `?noshafts`, `?nodof`, `?noskid`, `?fps=N`, `?auto` (autopilot), `?blow` (force an engine blow), `?lose=0..3` (tear that tyre off the player's truck), `?at=N&yaw=R&ram=V` (crash test), `?lava=N` (Eruption: start the lava N m behind the truck placed with `at`), `?trace` (log truck progress), `?look=x,y,z,tx,ty,tz` (a fixed camera, for scenery shots), `?still=N` (render one frame after N simulated steps,
 used for headless captures).
 
 ## Code
+
+`tools/physics_check.mjs` runs the truck on flat ground without a browser (`node tools/physics_check.mjs`) and prints
+ride height, droop, drop landings, body roll and what happens when a tyre is torn off.
 
 `src/main.js` (app state and loop), `world.js` (terrain, materials, lava), `track.js` (track geometry
 queries), `vehicle.js` (truck physics and visuals), `ai.js` (opponent drivers), `race.js` (grid, laps,

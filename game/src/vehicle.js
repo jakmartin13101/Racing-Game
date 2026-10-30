@@ -3,9 +3,9 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { Damage } from './damage.js';
 
-const BASE = import.meta.env.BASE_URL;
 const WHEELS = ['wheel_FL', 'wheel_FR', 'wheel_RL', 'wheel_RR'];
 const _p = new THREE.Vector3(), _r = new THREE.Vector3(), _v = new THREE.Vector3(), _s = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
+const _up2 = new THREE.Vector3(), _q = new THREE.Quaternion();
 
 // Trophy-truck tune. Units: metres, kg, N.
 export const TUNE = {
@@ -13,8 +13,18 @@ export const TUNE = {
   half: { x: 0.98, y: 0.38, z: 2.45 },
   comY: -0.35,
   wheelX: 1.02, wheelY: -0.08, wheelZf: 1.62, wheelZr: -1.55,
-  radius: 0.5, rest: 0.6, travel: 0.42,
-  stiffness: 34, compression: 3.2, relaxation: 3.8, maxForce: 60000,
+  radius: 0.5,
+  // Long-travel suspension. Rapier's spring force per wheel is stiffness * compression * chassis mass, so the
+  // static sag is g / (wheels * stiffness): about 0.19 m here, which leaves that much droop for the wheels to
+  // follow the ground down into dips and hang off the chassis in the air (about 1.1 Hz in heave, like a real
+  // trophy truck). `travel` is the bump travel from full droop; the last `bump` metres of it ride on
+  // progressive bump stops instead of slamming into a hard limit.
+  rest: 0.72, travel: 0.54, bump: 0.14,
+  stiffness: 13, compression: 1.9, relaxation: 2.7, maxForce: 60000,
+  // bump stop rate (m/s^2 per m^2 of compression, per wheel) and its damping (1/s)
+  bumpRate: 1500, bumpDamp: 6,
+  // anti-roll bars, front and rear (same units as the springs), so the soft springs don't let the body wallow
+  arbF: 9, arbR: 6,
   friction: 2.6, side: 1.1,
   engine: 6600, boost: 4300, brake: 260, reverse: 2600,
   steerMax: 0.5, topSpeed: 55,
@@ -23,7 +33,22 @@ export const TUNE = {
   gears: [3.2, 2.1, 1.5, 1.15, 0.92, 0.76], final: 7.0, idle: 950, redline: 7000, upshift: 6500, downshift: 2900, shiftTime: 0.16,
   // aerodynamic drag (N per (m/s)^2) and how much grip loose ground keeps compared with the track
   drag: 0.5, looseGrip: 0.82,
+  // what is left of a corner once its tyre is torn off: the bare hub and brake disc on a bent arm. It sits a
+  // tyre's depth lower, on a weakened spring, and gouges the ground instead of rolling.
+  hub: { radius: 0.2, spring: 0.35, bend: 0.12, grip: 0.45, side: 0.3, drag: 110, plough: 140, ploughMax: 0.2 },
+  // an arcade hand on the shoulder against rolling over, only past this much roll (radians) so it never holds a
+  // truck up on a missing wheel or flattens normal body roll
+  rollAssist: 6000, rollFree: 0.3,
 };
+
+// Wheel layout: where each wheel mounts, whether it steers, its share of drive and brake torque, and the axle it
+// shares with its partner across the vehicle (for the anti-roll bar). Built from the tune for the four-wheel
+// truck; other layouts (three-wheelers, bikes) only need a different list.
+export function wheelLayout(T = TUNE) {
+  const w = (x, z, front) => ({ pos: [x, T.wheelY, z], steer: front, drive: front ? 0.4 : 0.6, brake: front ? 0.6 : 0.4,
+    hand: !front, axle: front ? 0 : 1, arb: front ? T.arbF : T.arbR });
+  return [w(T.wheelX, T.wheelZf, true), w(-T.wheelX, T.wheelZf, true), w(T.wheelX, T.wheelZr, false), w(-T.wheelX, T.wheelZr, false)];
+}
 
 // engine torque against rpm, 1 at the peak (4800 rpm)
 const torqueCurve = (rpm) => THREE.MathUtils.clamp(1 - ((rpm - 4800) / 5200) ** 2 * 1.4, 0.55, 1);
@@ -72,6 +97,7 @@ export function addStaticBoxes(phys, boxes) {
 
 // ---------------------------------------------------------------- truck model and materials
 export async function loadTruckAssets(renderer) {
+  const BASE = import.meta.env.BASE_URL;
   const loader = new GLTFLoader();
   const [full, lod] = await Promise.all([
     loader.loadAsync(`${BASE}models/truck.glb`), loader.loadAsync(`${BASE}models/truck_lod.glb`),
@@ -91,6 +117,7 @@ export async function loadTruckAssets(renderer) {
 }
 
 async function truckMaterials(renderer) {
+  const BASE = import.meta.env.BASE_URL;
   const tl = new THREE.TextureLoader();
   const aniso = renderer.capabilities.getMaxAnisotropy();
   const files = ['body_col.jpg', 'body_orm.jpg', 'body_nrm.png', 'body_coat.jpg', 'wheel_col.jpg', 'wheel_orm.jpg', 'wheel_nrm.png'];
@@ -193,6 +220,26 @@ function buildVisual(src, paint, mats) {
   return { root, wheels, body };
 }
 
+// bare hub left on the axle when a tyre is torn off: brake disc, hub and wheel studs, in scuffed steel
+let hubGeo = null;
+const hubMat = new THREE.MeshStandardMaterial({ color: 0x4a4744, metalness: 0.9, roughness: 0.45 });
+function hubMesh(side) {
+  if (!hubGeo) {
+    const disc = new THREE.CylinderGeometry(TUNE.hub.radius, TUNE.hub.radius, 0.04, 28);
+    const hub = new THREE.CylinderGeometry(0.11, 0.13, 0.16, 16).translate(0, 0.08, 0);
+    hubGeo = [disc, hub];
+  }
+  const g = new THREE.Group();
+  for (const geo of hubGeo) {
+    const m = new THREE.Mesh(geo, hubMat);
+    m.castShadow = true;
+    g.add(m);
+  }
+  // cylinders stand on y; lay them on the axle, hub face pointing outwards
+  g.rotation.z = side > 0 ? -Math.PI / 2 : Math.PI / 2;
+  return g;
+}
+
 // ---------------------------------------------------------------- vehicle
 export class Vehicle {
   constructor({ phys, scene, assets, paint = PAINTS[0], lodOnly = false, name = '', number = 0, isPlayer = false, crash = null }) {
@@ -240,11 +287,9 @@ export class Vehicle {
     const vc = this.phys.createVehicleController(this.body);
     vc.indexUpAxis = 1;
     vc.setIndexForwardAxis = 2;
-    const pts = [
-      [T.wheelX, T.wheelY, T.wheelZf], [-T.wheelX, T.wheelY, T.wheelZf],
-      [T.wheelX, T.wheelY, T.wheelZr], [-T.wheelX, T.wheelY, T.wheelZr],
-    ];
-    pts.forEach((p, i) => {
+    this.layout = wheelLayout(T);
+    this.layout.forEach((L, i) => {
+      const p = L.pos;
       vc.addWheel({ x: p[0], y: p[1], z: p[2] }, { x: 0, y: -1, z: 0 }, { x: -1, y: 0, z: 0 }, T.rest, T.radius);
       vc.setWheelSuspensionStiffness(i, T.stiffness);
       vc.setWheelMaxSuspensionTravel(i, T.travel);
@@ -253,9 +298,15 @@ export class Vehicle {
       vc.setWheelMaxSuspensionForce(i, T.maxForce);
       vc.setWheelFrictionSlip(i, T.friction);
       vc.setWheelSideFrictionStiffness(i, T.side);
+      // the partner on the same axle, across the vehicle
+      L.mate = this.layout.findIndex((o, j) => j !== i && o.axle === L.axle);
     });
     this.vc = vc;
-    this.wheelPts = pts;
+    this.wheelPts = this.layout.map((L) => L.pos);
+    this.nWheels = this.layout.length;
+    this.lostWheels = new Set();
+    // suspension length per wheel as the geometry has it (rapier clamps its own at the end of the travel)
+    this.squash = new Float32Array(this.nWheels).fill(T.rest);
   }
 
   place(x, y, z, yaw) {
@@ -279,8 +330,7 @@ export class Vehicle {
     // a bent wheel pulls the truck to one side
     const pull = this.damage ? this.damage.wheels.reduce((a, w, i) => a + (i < 2 ? w.bent * 0.35 : w.bent * 0.15), 0) : 0;
     const steer = (I.steer * T.steerMax + pull * 0.25) * (1 - Math.min(spd / 70, 0.6));
-    vc.setWheelSteering(0, steer);
-    vc.setWheelSteering(1, steer);
+    this.steerWheels(steer);
     let force = 0, brake = 0;
     const dead = this.totaled;
     // damage costs power and top speed; a totaled truck only coasts
@@ -326,20 +376,26 @@ export class Vehicle {
     }
     if (frozen) { force = 0; brake = 60; }
     if (dead && I.brake > 0) { force = 0; brake = T.brake * I.brake; }
-    for (let i = 0; i < 4; i++) {
-      vc.setWheelEngineForce(i, force * (i < 2 ? 0.4 : 0.6));
-      vc.setWheelBrake(i, brake * (i < 2 ? 0.6 : 0.4) + (i >= 2 ? I.hand * 40 : 0));
-      if (!this.lostWheels?.has(i)) vc.setWheelSideFrictionStiffness(i, i >= 2 && I.hand ? 0.45 : T.side);
+    // drive and brakes split by the layout; a bare hub gets no drive (its share goes to the wheels still on)
+    const L = this.layout, lost = this.lostWheels, H = T.hub;
+    let driveAll = 0, driveSum = 0;
+    for (let i = 0; i < this.nWheels; i++) { driveAll += L[i].drive; if (!lost.has(i)) driveSum += L[i].drive; }
+    for (let i = 0; i < this.nWheels; i++) {
+      const hub = lost.has(i);
+      vc.setWheelEngineForce(i, hub || !driveSum ? 0 : force * L[i].drive * driveAll / driveSum);
+      vc.setWheelBrake(i, hub ? H.drag : brake * L[i].brake + (L[i].hand ? I.hand * 40 : 0));
+      if (!hub) vc.setWheelSideFrictionStiffness(i, L[i].hand && I.hand ? 0.45 : T.side);
     }
     // rolling resistance and engine braking when coasting, a little more for a wreck; loose ground drags
     const loose = this.surface;
     if (!frozen && (dead ? !(I.brake > 0) : !I.throttle && !I.brake)) {
       const eb = dead ? 7 : 3 + 5 * (this.rpm / T.redline) * (T.gears[this.gear - 1] / 1.5);
-      for (let i = 0; i < 4; i++) vc.setWheelBrake(i, eb + loose * 4);
+      for (let i = 0; i < this.nWheels; i++) if (!lost.has(i)) vc.setWheelBrake(i, eb + loose * 4);
     }
     // grip: full on the track, less on loose ash and gravel, almost none on a bare hub
-    for (let i = 0; i < 4; i++) if (!this.lostWheels?.has(i)) vc.setWheelFrictionSlip(i, T.friction * (1 - (1 - T.looseGrip) * loose));
+    for (let i = 0; i < this.nWheels; i++) if (!lost.has(i)) vc.setWheelFrictionSlip(i, T.friction * (1 - (1 - T.looseGrip) * loose));
     vc.updateVehicle(dt, undefined, RAY_GROUND);
+    this.suspensionExtras(dt);
     // air drag, opposite the motion and growing with the square of the speed
     if (spd > 1) { const k = -T.drag * spd * dt; this.body.applyImpulse({ x: v.x * k, y: v.y * k * 0.3, z: v.z * k }, true); }
 
@@ -348,7 +404,7 @@ export class Vehicle {
     const qq = new THREE.Quaternion(q.x, q.y, q.z, q.w);
     const up = new THREE.Vector3(0, 1, 0).applyQuaternion(qq);
     let contacts = 0;
-    for (let i = 0; i < 4; i++) contacts += vc.wheelIsInContact(i) ? 1 : 0;
+    for (let i = 0; i < this.nWheels; i++) contacts += vc.wheelIsInContact(i) ? 1 : 0;
     this.contacts = contacts;
     this.up = up.y;
     if (contacts === 0) {
@@ -361,19 +417,104 @@ export class Vehicle {
       this.body.applyImpulse({ x: 0, y: -spd * spd * 0.9 * dt, z: 0 }, true);
       // tyres dig into loose ground
       if (loose > 0 && spd > 1) { const k = -loose * 1500 * dt / spd; this.body.applyImpulse({ x: v.x * k, y: 0, z: v.z * k }, true); }
+      // only past the free band, so the truck leans in corners and sits down on a missing wheel
       const right = new THREE.Vector3(1, 0, 0).applyQuaternion(qq);
-      const roll = right.y;
+      const roll = right.y, over = Math.sign(roll) * Math.max(0, Math.abs(roll) - T.rollFree);
       const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(qq);
-      this.body.applyTorqueImpulse({ x: fwd.x * roll * 6000 * dt, y: fwd.y * roll * 6000 * dt, z: fwd.z * roll * 6000 * dt }, true);
+      const k = over * T.rollAssist * dt;
+      this.body.applyTorqueImpulse({ x: fwd.x * k, y: fwd.y * k, z: fwd.z * k }, true);
     }
   }
 
-  // a lost tyre leaves the hub running on the ground: low, and with little grip
+  // Ackermann steering: the inside front wheel turns tighter than the outside one, both about the rear axle
+  steerWheels(steer) {
+    const L = this.layout, vc = this.vc;
+    const base = Math.abs(TUNE.wheelZf - TUNE.wheelZr), t = Math.tan(steer);
+    for (let i = 0; i < this.nWheels; i++) {
+      if (!L[i].steer) continue;
+      const x = L[i].pos[0];
+      // positive steer turns towards +x (left), so the +x wheel is on the inside
+      vc.setWheelSteering(i, Math.abs(t) < 1e-4 ? steer : Math.atan(base / (base / t - x)));
+    }
+  }
+
+  // What rapier's ray-cast suspension leaves out: bump stops at the end of the travel (rapier just clamps the
+  // spring, so a big landing would sink the wheels into the ground until the body hit) and anti-roll bars
+  // across each axle, both pushing on the chassis at the wheel's mounting point along the strut; and the drag
+  // of a bare hub.
+  suspensionExtras(dt) {
+    const T = TUNE, vc = this.vc, L = this.layout, M = this.body.mass();
+    const q = this.body.rotation();
+    const up = _up2.set(0, 1, 0).applyQuaternion(_q.set(q.x, q.y, q.z, q.w));
+    const min = T.rest - T.travel, start = min + T.bump;
+    const sq = this.squash;
+    const t = this.body.translation(), lv = this.body.linvel(), w = this.body.angvel();
+    for (let i = 0; i < this.nWheels; i++) {
+      if (!vc.wheelIsInContact(i)) { sq[i] = T.rest; continue; }
+      // true spring length from the mount to the contact point, less the wheel (or bare hub)
+      const hp = vc.wheelHardPoint(i), cp = vc.wheelContactPoint(i);
+      sq[i] = (hp.x - cp.x) * up.x + (hp.y - cp.y) * up.y + (hp.z - cp.z) * up.z - vc.wheelRadius(i);
+      if (sq[i] >= start) continue;
+      const c = Math.min(start - sq[i], T.bump);
+      // how fast this corner is moving along the strut right now (negative: squashing)
+      _r.set(hp.x - t.x, hp.y - t.y, hp.z - t.z);
+      const vel = _v.set(w.x, w.y, w.z).cross(_r).add(_s.set(lv.x, lv.y, lv.z)).dot(up);
+      // Progressive, and hydraulic: it soaks up a landing instead of springing the truck back into the air, so
+      // it pushes back only a little on the way out. Past the end of the travel it is a stiff stop.
+      const pen = Math.max(0, min - sq[i]);
+      let imp = M * dt * (vel < 0
+        ? T.bumpRate * c * c + T.bumpDamp * -vel * Math.min(1, c / T.bump) + pen * (400 + 60 * -vel)
+        : 0.15 * T.bumpRate * c * c);
+      // never more than stops this corner's share of the truck in one step, so a stop can't fling it back up
+      if (vel < 0) imp = Math.min(imp, (M / this.nWheels) * -vel + M * dt * 0.15 * T.bumpRate * c * c);
+      this.push(i, up, Math.min(imp, T.maxForce * 2 * dt));
+    }
+    // a bare hub digs into the ground and drags that corner back, more the faster it goes
+    for (const i of this.lostWheels) {
+      if (!vc.wheelIsInContact(i)) continue;
+      const cp = vc.wheelContactPoint(i);
+      _r.set(cp.x - t.x, cp.y - t.y, cp.z - t.z);
+      _v.set(w.x, w.y, w.z).cross(_r).add(_s.set(lv.x, lv.y, lv.z)).projectOnPlane(up);
+      const sp = _v.length();
+      if (sp < 0.3) continue;
+      const imp = -Math.min(T.hub.plough * sp, T.hub.ploughMax * M * 9.81) * dt / sp;
+      this.body.applyImpulseAtPoint({ x: _v.x * imp, y: _v.y * imp, z: _v.z * imp }, cp, true);
+    }
+    // anti-roll bars: a pair of wheels both on the ground, neither of them a bare hub
+    for (let i = 0; i < this.nWheels; i++) {
+      const j = L[i].mate;
+      if (j < i || !L[i].arb || this.lostWheels.has(i) || this.lostWheels.has(j)) continue;
+      if (!vc.wheelIsInContact(i) || !vc.wheelIsInContact(j)) continue;
+      const f = L[i].arb * M * (sq[j] - sq[i]) * dt;
+      this.push(i, up, f);
+      this.push(j, up, -f);
+    }
+  }
+
+  push(i, dir, imp) {
+    const hp = this.vc.wheelHardPoint(i);
+    this.body.applyImpulseAtPoint({ x: dir.x * imp, y: dir.y * imp, z: dir.z * imp }, hp, true);
+  }
+
+  // A torn-off tyre leaves the bare hub on a bent arm: that corner drops by the depth of the tyre and sags on the
+  // weakened spring, and the hub ploughs and grinds instead of rolling, dragging that side back.
   loseWheel(i) {
-    this.vc.setWheelRadius(i, 0.24);
-    this.vc.setWheelFrictionSlip(i, 0.6);
-    this.vc.setWheelSideFrictionStiffness(i, 0.35);
-    (this.lostWheels ||= new Set()).add(i);
+    const H = TUNE.hub, vc = this.vc;
+    if (this.lostWheels.has(i)) return;
+    vc.setWheelRadius(i, H.radius);
+    vc.setWheelSuspensionStiffness(i, TUNE.stiffness * H.spring);
+    vc.setWheelSuspensionRestLength(i, TUNE.rest - H.bend);
+    vc.setWheelFrictionSlip(i, H.grip);
+    vc.setWheelSideFrictionStiffness(i, H.side);
+    this.lostWheels.add(i);
+    // show the hub and disc where the wheel was, so nothing seems to float on an invisible tyre
+    for (const p of this.parts) {
+      const w = p.wheels[i];
+      if (!w || w.hub) continue;
+      w.hub = new THREE.Group();
+      w.hub.add(hubMesh(this.layout[i].pos[0]));
+      w.pivot.add(w.hub);
+    }
   }
 
   // copy physics into the visual; emits wheel dust when `dust` is given
@@ -384,7 +525,7 @@ export class Vehicle {
     const vc = this.vc;
     const v = this.body.linvel();
     const spd = Math.hypot(v.x, v.z);
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < this.nWheels; i++) {
       const susp = vc.wheelSuspensionLength(i) ?? TUNE.rest;
       const steer = vc.wheelSteering(i) ?? 0;
       const rot = vc.wheelRotation(i) ?? 0;
@@ -395,8 +536,9 @@ export class Vehicle {
         w.pivot.rotation.y = steer;
         w.pivot.rotation.z = this.damage?.wheels[i].bent || 0;
         w.spin.rotation.x = rot;
+        if (w.hub) w.hub.rotation.x = rot;
       }
-      if (dust && !this.lostWheels?.has(i) && vc.wheelIsInContact(i) && spd > 4 && Math.random() < (0.5 + spd / 60) * emitScale) {
+      if (dust && !this.lostWheels.has(i) && vc.wheelIsInContact(i) && spd > 4 && Math.random() < (0.5 + spd / 60) * emitScale) {
         const cp = vc.wheelContactPoint(i);
         const side = Math.abs(vc.wheelSideImpulse(i) ?? 0);
         const kick = new THREE.Vector3(-v.x * 0.12 + (Math.random() - 0.5) * 2, 0.8 + Math.random() * 1.2, -v.z * 0.12 + (Math.random() - 0.5) * 2);
@@ -410,7 +552,7 @@ export class Vehicle {
   skidMark(i) {
     const vc = this.vc;
     const id = `${this.number}-${i}`;
-    if (this.lostWheels?.has(i) || !vc.wheelIsInContact(i)) { this.skids.add(id, null, null, 0); return; }
+    if (this.lostWheels.has(i) || !vc.wheelIsInContact(i)) { this.skids.add(id, null, null, 0); return; }
     const c = vc.wheelContactPoint(i);
     const cp = _p.set(c.x, c.y, c.z);
     const t = this.body.translation(), v = this.body.linvel(), w = this.body.angvel();

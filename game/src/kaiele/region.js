@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { buildTrackRibbon, mulberry } from '../world.js';
 import { buildIslandTerrain } from './terrain.js';
+import { buildKaieleRoads } from './road.js';
+import { buildKaieleSky } from './sky.js';
 import { buildOcean } from './ocean.js';
 import { buildFreshWater } from './water.js';
 import { buildVegetation } from './vegetation.js';
@@ -19,8 +21,9 @@ export async function buildKaiele(ctx) {
   fog.color.setRGB(0.66, 0.76, 0.86);
   fog.density = 0.00016;
   fog.sun = 3.1;
-  scene.add(buildIslandTerrain(world, M, quality));
-  for (const t of tracks) scene.add(buildTrackRibbon(world, M, t));
+  ctx.sky = await buildKaieleSky(ctx);
+  scene.add(await buildIslandTerrain(world, M, quality));
+  for (const t of world.data.tracks) scene.add(buildKaieleRoads(world, M, t, quality));
   const parts = [];
   const ocean = buildOcean(ctx);
   parts.push(ocean);

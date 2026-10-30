@@ -1,0 +1,6 @@
+Namaqualand Cliff 02 (namaqualand_cliff_02)
+Source: https://polyhaven.com/a/namaqualand_cliff_02
+Author(s): Dario Barresi, Rico Cilliers
+License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
+Type: model
+Files: namaqualand_cliff_02_2k.gltf, textures/namaqualand_cliff_02_diff_2k.jpg, textures/namaqualand_cliff_02_nor_gl_2k.jpg, textures/namaqualand_cliff_02_arm_2k.jpg, namaqualand_cliff_02.bin

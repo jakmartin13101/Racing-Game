@@ -1,0 +1,6 @@
+Shrub 01 (shrub_01)
+Source: https://polyhaven.com/a/shrub_01
+Author(s): Rico Cilliers
+License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
+Type: model
+Files: shrub_01_2k.gltf, textures/shrub_01_nor_gl_2k.jpg, textures/shrub_01_arm_2k.jpg, shrub_01.bin, textures/shrub_01_diff_2k.jpg

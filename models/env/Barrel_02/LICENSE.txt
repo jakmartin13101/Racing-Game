@@ -1,0 +1,6 @@
+Barrel 02 (Barrel_02)
+Source: https://polyhaven.com/a/Barrel_02
+Author(s): Jorge Camacho
+License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
+Type: model
+Files: Barrel_02_2k.gltf, textures/Barrel_02_diff_2k.jpg, textures/Barrel_02_arm_2k.jpg, Barrel_02.bin, textures/Barrel_02_nor_gl_2k.jpg

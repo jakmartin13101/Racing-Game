@@ -1,0 +1,6 @@
+Barrel 03 (barrel_03)
+Source: https://polyhaven.com/a/barrel_03
+Author(s): Serhii Khromov
+License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
+Type: model
+Files: barrel_03_2k.gltf, textures/barrel_03_diff_2k.jpg, textures/barrel_03_arm_2k.jpg, barrel_03.bin, textures/barrel_03_nor_gl_2k.jpg

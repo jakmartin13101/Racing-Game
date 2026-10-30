@@ -27,9 +27,10 @@ export async function buildKaiele(ctx) {
   ctx.loadStep?.(0.36, 'FILLING THE RIVERS…');
   parts.push(buildFreshWater(ctx));
   ctx.loadStep?.(0.4, 'GROWING THE JUNGLE…');
-  parts.push(await buildVegetation(ctx));
+  const veg = await buildVegetation(ctx);
+  parts.push(veg);
   const props = { handles: [], models: {}, update() {} };
-  const colliders = [];
+  const colliders = [...(veg.colliders || [])];
   const events = {};
   for (const [id, load] of Object.entries(TRACK_EVENTS)) {
     if (!tracks.some((t) => t.id === id)) continue;

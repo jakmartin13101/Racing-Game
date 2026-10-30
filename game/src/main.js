@@ -368,6 +368,7 @@ function raceEvents() {
     else if (e.type === 'breakout') { toast('Lava breakout ahead!'); rig.bump(0.3); }
     else if (e.type === 'loose' && me && e.label) toast(`${e.label} hanging loose`);
     else if (e.type === 'tyre' && me) toast('Lost a wheel!');
+    else if (e.type === 'toast' && me && e.text) toast(e.text); // track events (Kai'ele gusts, rockfall)
   }
 }
 const tmp = new THREE.Vector3();

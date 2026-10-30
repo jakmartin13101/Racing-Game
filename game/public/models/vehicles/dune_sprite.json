@@ -1,0 +1,55 @@
+{
+ "id": "dune_sprite",
+ "name": "Sprite",
+ "class": "dune",
+ "number": 2,
+ "model": "models/vehicles/dune_sprite.glb",
+ "textures": "models/vehicles/dune_sprite/",
+ "wheels": {
+  "wheel_FL": {
+   "pos": [
+    0.75,
+    -0.975,
+    -0.37
+   ],
+   "radius": 0.33
+  },
+  "wheel_FR": {
+   "pos": [
+    -0.75,
+    -0.975,
+    -0.37
+   ],
+   "radius": 0.33
+  },
+  "wheel_RL": {
+   "pos": [
+    0.78,
+    0.975,
+    -0.33
+   ],
+   "radius": 0.37
+  },
+  "wheel_RR": {
+   "pos": [
+    -0.78,
+    0.975,
+    -0.33
+   ],
+   "radius": 0.37
+  }
+ },
+ "steer": null,
+ "origin_height": 0.7,
+ "length": 3.15,
+ "width": 1.96,
+ "height": 1.72,
+ "tris": 116486,
+ "tune": {
+  "mass": 640,
+  "power": 0.6,
+  "grip": 0.98,
+  "top": 132
+ },
+ "blurb": "Short-wheelbase street buggy, all chrome and mesh rims"
+}

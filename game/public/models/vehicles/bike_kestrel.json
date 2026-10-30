@@ -1,0 +1,50 @@
+{
+ "id": "bike_kestrel",
+ "name": "Kestrel MX",
+ "class": "bike",
+ "number": 3,
+ "model": "models/vehicles/bike_kestrel.glb",
+ "textures": "models/vehicles/bike_kestrel/",
+ "wheels": {
+  "wheel_F": {
+   "pos": [
+    -0.0,
+    -0.74,
+    -0.24
+   ],
+   "radius": 0.36
+  },
+  "wheel_R": {
+   "pos": [
+    0.0,
+    0.74,
+    -0.25
+   ],
+   "radius": 0.35
+  }
+ },
+ "steer": {
+  "pivot": [
+   -0.0,
+   -0.3839,
+   0.4
+  ],
+  "axis": [
+   -0.0,
+   0.291,
+   0.454
+  ]
+ },
+ "origin_height": 0.6,
+ "length": 2.29,
+ "width": 0.84,
+ "height": 1.25,
+ "tris": 78022,
+ "tune": {
+  "mass": 108,
+  "power": 0.6,
+  "grip": 1.0,
+  "top": 132
+ },
+ "blurb": "450 four-stroke motocross racer"
+}

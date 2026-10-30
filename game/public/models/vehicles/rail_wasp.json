@@ -1,0 +1,55 @@
+{
+ "id": "rail_wasp",
+ "name": "Wasp",
+ "class": "rail",
+ "number": 5,
+ "model": "models/vehicles/rail_wasp.glb",
+ "textures": "models/vehicles/rail_wasp/",
+ "wheels": {
+  "wheel_FL": {
+   "pos": [
+    0.75,
+    -1.2,
+    -0.42
+   ],
+   "radius": 0.33
+  },
+  "wheel_FR": {
+   "pos": [
+    -0.75,
+    -1.2,
+    -0.42
+   ],
+   "radius": 0.33
+  },
+  "wheel_RL": {
+   "pos": [
+    0.78,
+    1.2,
+    -0.36
+   ],
+   "radius": 0.39
+  },
+  "wheel_RR": {
+   "pos": [
+    -0.78,
+    1.2,
+    -0.36
+   ],
+   "radius": 0.39
+  }
+ },
+ "steer": null,
+ "origin_height": 0.75,
+ "length": 3.75,
+ "width": 1.88,
+ "height": 1.6,
+ "tris": 99453,
+ "tune": {
+  "mass": 520,
+  "power": 0.62,
+  "grip": 0.98,
+  "top": 132
+ },
+ "blurb": "Single-seat mini rail, tiny and quick to rotate"
+}

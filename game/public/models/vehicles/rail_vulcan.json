@@ -1,0 +1,55 @@
+{
+ "id": "rail_vulcan",
+ "name": "Vulcan",
+ "class": "rail",
+ "number": 666,
+ "model": "models/vehicles/rail_vulcan.glb",
+ "textures": "models/vehicles/rail_vulcan/",
+ "wheels": {
+  "wheel_FL": {
+   "pos": [
+    0.86,
+    -1.45,
+    -0.39
+   ],
+   "radius": 0.36
+  },
+  "wheel_FR": {
+   "pos": [
+    -0.86,
+    -1.45,
+    -0.39
+   ],
+   "radius": 0.36
+  },
+  "wheel_RL": {
+   "pos": [
+    0.89,
+    1.45,
+    -0.33
+   ],
+   "radius": 0.42
+  },
+  "wheel_RR": {
+   "pos": [
+    -0.89,
+    1.45,
+    -0.33
+   ],
+   "radius": 0.42
+  }
+ },
+ "steer": null,
+ "origin_height": 0.75,
+ "length": 4.25,
+ "width": 2.14,
+ "height": 1.75,
+ "tris": 110805,
+ "tune": {
+  "mass": 880,
+  "power": 0.95,
+  "grip": 0.92,
+  "top": 158
+ },
+ "blurb": "Big-block rail with open zoomie stacks"
+}

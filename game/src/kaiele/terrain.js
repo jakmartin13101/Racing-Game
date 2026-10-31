@@ -473,7 +473,7 @@ float wDirt = smoothstep(0.18, 0.34, slopeM + (nz2.g - 0.5) * 0.22 + (gully - 0.
 wDirt = max(wDirt, smoothstep(0.7, 0.82, nz.b * 0.7 + nzm.g * 0.35) * 0.8);
 wDirt = max(wDirt, dry * smoothstep(0.62, 0.75, nz2.r * 0.7 + nzm.g * 0.4) * 0.85);
 wDirt *= 1.0 - smoothstep(0.6, 0.95, bm.b) * 0.7;
-float snow = smoothstep(uSnowLine, uSnowLine + 40.0, y + nz.r * 40.0 + nz2.g * 10.0) * (1.0 - wCliff * 0.6);
+float snow = smoothstep(uSnowLine, uSnowLine + 40.0, y + nz.r * 40.0 + nz2.g * 10.0) * (1.0 - wCliff * 0.6) * (1.0 - fresh);
 
 // ---- sand: black volcanic on the south beach, white coral at the north cove, wet and glossy at the waterline
 vec2 sh = texture(tShore, wuv).rg;

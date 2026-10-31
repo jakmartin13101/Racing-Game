@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { kaieleSet, KAIELE_GLSL } from './terrain.js';
+import { kaieleSet, kaieleShore, KAIELE_GLSL, SAND_GLSL } from './terrain.js';
 
 // Kai'ele track surfaces: the ribbon of buildTrackRibbon (world.js), split into runs by track.surf, each run laid
 // with its own surface shader. Runs overlap their neighbours by OV rows and fade in and out along the overlap, so
@@ -101,7 +101,7 @@ export function buildKaieleRoads(world, M, track, quality) {
     geo.setIndex(g.idx);
     geo.computeVertexNormals();
     geo.computeBoundingSphere();
-    const mesh = new THREE.Mesh(geo, surfaceMaterial(M, k, W, quality));
+    const mesh = new THREE.Mesh(geo, surfaceMaterial(world, M, k, W, quality));
     mesh.receiveShadow = true;
     mesh.renderOrder = 1;
     group.add(mesh);
@@ -126,17 +126,55 @@ float stones = smoothstep(0.72, 0.8, texture(tNoise, vW.xz / 0.7).r) * (1.0 - cl
 col = mix(col, vec3(0.85, 0.84, 0.8), stones * 0.5);
 POTHOLES(0.62, 0.55, 0.48)
 edgeW = 1.0;`,
+  // the beach itself (SAND_GLSL, world space, so it runs on seamlessly under the ribbon's soft edge) churned by
+  // the traffic: every wheel line is a few overlapping tyre tracks, flat-bottomed ruts printed with tread lugs and
+  // edged with berms of the sand they pushed aside, loose sand thrown up in heaps at the road's edges
   sand: /* glsl */`
-vec2 uv = vec2(along, lat) / 4.0;
-vec4 A = texAT(tA, uv, nzf.r), Pk = texAT(tP, uv, nzf.r);
-float L0 = lum3(A.rgb);
-SANDCOL
-// churned: tyres dig ruts and heap the sand between them
-float churn = texture(tNoise, vec2(lat / 1.3, along / 3.0)).r;
-tn = normalize(unpackNP(Pk) + vec3((churn - 0.5) * 0.6 * rut, (churn - 0.5) * 0.3, 0.0));
-tn.y += rutD * 0.16;
-col *= mix(1.0, 0.82 + churn * 0.2, clamp(rut, 0.0, 1.0));
-ao = Pk.b * mix(1.0, 0.85, clamp(rut, 0.0, 1.0));
+SANDKIND
+float ax = abs(lat);
+float onRoad = 1.0 - smoothstep(uHalfW * 0.8, uHalfW * 1.15, ax + (nzf.b - 0.5) * 2.0);
+float trod = onRoad * 0.92;
+vec2 sh = texture(tX, vW.xz / uExtent + 0.5).rg;
+Sand sd = sandAt(tA, tP, tNoise, vW, sh.r * 64.0 - 8.0, sh.g * 1.25, white, trod, camD, wetX);
+// relief h (m) and its slope along and across; tread fades out once a lug is under a pixel
+float hR = 0.0, hL = 0.0, hA = 0.0, tr = 0.0;
+float lugK = 1.0 - smoothstep(0.012, 0.035, fwidth(along));
+for (int k = 0; k < 4; k++) for (int m = 0; m < 3; m++) {
+  // each wheel line: three trucks' tracks wandering about it (sines: no texture lookups in the loop)
+  float fk = float(k), fm = float(m);
+  float off = (fk - 1.5) * 1.75 + (k > 1 ? 0.25 : -0.25) + (sin(along / (23.0 + fk * 3.0) + fk * 1.7 + fm * 2.3) * 0.45 + sin(along / (9.1 + fm) + fm * 4.1 + fk) * 0.15) * (0.4 + fm * 0.5);
+  float w = 0.19 + 0.04 * fm;
+  float dep = (0.055 + 0.02 * sin(along / 6.3 + fk * 2.0 + fm)) * (1.0 - fm * 0.25);
+  float d = l - off;
+  float g = exp(-d * d / (w * w));
+  float bw = w * 0.7, bd = (abs(d) - w * 1.6) / bw, be = exp(-bd * bd) * 0.55;
+  hR += -g * dep + be * dep;
+  hL += (2.0 * d / (w * w) * g - 2.0 * bd / bw * sign(d) * be) * dep;
+  // lugs: a chevron across the tyre, 11 cm pitch, printed in the rut's floor (crisp only in the latest track)
+  float ph = (along + abs(d) * 0.7 + fm * 0.05) * 6.283 / 0.11;
+  hA += cos(ph) * 6.283 / 0.11 * 0.0035 * smoothstep(0.5, 0.9, g) * lugK * (1.0 - fm * 0.6); // older tracks: worn lugs
+  tr = max(tr, g * (1.0 - fm * 0.2));
+}
+// churned sand between the ruts, and the loose heaps along the edges
+vec2 cq = vW.xz / 0.7;
+float c0 = texture(tNoise, cq).r, cx = texture(tNoise, cq + vec2(0.02, 0.0)).r, cz = texture(tNoise, cq + vec2(0.0, 0.02)).r;
+float churn = onRoad * (0.5 + 0.5 * nzf.g) * (1.0 - tr * 0.5);
+float ed = (ax - uHalfW * (0.82 + 0.12 * nzf.r)) / 0.9, heap = exp(-ed * ed) * (0.6 + 0.8 * nzf.g);
+hL += -2.0 * ed / 0.9 * heap * 0.08 * sign(lat);
+float relief = onRoad * RELIEF;
+tn = normalize(vec3(-hA * relief, -hL * relief, 1.0));
+rW = sd.tn.xy + vec2(c0 - cx, c0 - cz) * (churn * 4.5 + heap * 4.0) * (1.0 - wetX * 0.75); // packed wet sand barely churns
+col = sd.col;
+// rut floors are packed and a shade darker (damper sand from below); berms and heaps loose, dry, a touch paler
+col *= mix(1.0, RUTCOL * (0.8 + 0.4 * c0), tr * onRoad);
+col *= 1.0 + (heap * 0.12 + max(hR, 0.0) * 2.0) * (1.0 - sd.wet);
+ao = sd.ao * (1.0 - tr * onRoad * 0.2) * (1.0 - heap * 0.1);
+rgh = mix(sd.rgh, RUTRGH, tr * onRoad);
+gritK = 0.0;
+// the ground's macro breakup (terrain.js), so the colour matches across the soft edge
+col *= mix(0.8, 1.12, texture(tNoise, vW.xz / 240.0).g) * mix(0.9, 1.07, texture(tNoise, vW.xz / 37.0).r);
+vec3 nzm7 = texture(tNoise, vW.xz / 7.0).rgb;
+col *= mix(1.0, mix(0.82, 1.1, nzm7.r) * mix(0.93, 1.05, nzm7.b), smoothstep(12.0, 40.0, camD) * (1.0 - smoothstep(150.0, 400.0, camD)));
 edgeW = 4.5;`,
   dirt: /* glsl */`
 vec2 uv = vec2(along, lat) / 4.0;
@@ -201,10 +239,11 @@ rgh = 0.25;
 float pool = smoothstep(0.64, 0.7, texture(tNoise, vec2(along / 7.0, lat / 7.0 + 0.3)).b);
 col = mix(col, col * vec3(0.3, 0.4, 0.42), pool); rgh = mix(rgh, 0.04, pool); tn = normalize(mix(tn, vec3(0,0,1), pool));`,
 };
-const SANDCOL = {
-  sand: 'col = vec3(0.05, 0.048, 0.046) * (0.6 + L0 * 1.2); rgh = 0.6;',
-  wetsand: 'col = vec3(0.038, 0.035, 0.032) * (0.6 + L0 * 1.2); rgh = 0.34; Pk.xy = mix(Pk.xy, vec2(0.5), 0.5);',
-  whitesand: 'col = A.rgb * vec3(1.3, 1.28, 1.17); rgh = 0.85;',
+// sand kinds: colour, wetness (the surf line's packed wet sand: darker, smoother, shallow ruts that hold water)
+const SANDKIND = {
+  sand: { k: 'float white = 0.0, wetX = 0.0;', relief: '2.4', rutcol: '0.85', rutrgh: 'sd.rgh * 0.9' },
+  wetsand: { k: 'float white = 0.0, wetX = 0.75;', relief: '1.0', rutcol: '0.7', rutrgh: '0.06' },
+  whitesand: { k: 'float white = 1.0, wetX = 0.0;', relief: '2.4', rutcol: '0.86', rutrgh: 'sd.rgh * 0.9' },
 };
 // shallow dished hollows between the ruts
 const POTHOLES = (r, g, b) => /* glsl */`
@@ -222,7 +261,7 @@ col = mix(col, col * 0.6, rim); rgh = mix(rgh, 0.35, rim);
 col = mix(col, vec3(${r}, ${g}, ${b}) * 0.6, pud); rgh = mix(rgh, 0.03, pud); tn = normalize(mix(tn, vec3(0,0,1), pud)); ao = mix(ao, 1.0, pud);`;
 
 const SETB = { grass: 'dirt' };
-function surfaceMaterial(M, kind, W, quality) {
+function surfaceMaterial(world, M, kind, W, quality) {
   const aniso = quality.aiLod ? 4 : 8;
   const set = kaieleSet(SET[kind], aniso);
   const mat = new THREE.MeshStandardMaterial({
@@ -232,10 +271,15 @@ function surfaceMaterial(M, kind, W, quality) {
   mat.userData.wx = 'road';
   const uniforms = { tA: { value: set.a }, tP: { value: set.p }, tNoise: { value: M.noise }, uHalfW: { value: W / 2 }, uWet: { value: 0 } };
   if (SETB[kind]) { const b = kaieleSet(SETB[kind], aniso); uniforms.tB = { value: b.a }; uniforms.tBP = { value: b.p }; }
+  const isSand = !!SANDKIND[kind];
+  if (isSand) Object.assign(uniforms, { tX: { value: kaieleShore(world) }, uExtent: { value: world.extent } });
   mat.userData.uniforms = uniforms;
-  const fam = SURF[kind] ? kind : (SANDCOL[kind] ? 'sand' : 'rock');
+  if (isSand && quality.terrainStep > 3) mat.defines = { SAND_LO: '' }; // low preset (as main.js tells it)
+  const fam = SURF[kind] ? kind : (SANDKIND[kind] ? 'sand' : 'rock');
   const body = SURF[fam]
-    .replace('SANDCOL', SANDCOL[kind] || '').replace('ROCKKIND', ROCKKIND[kind] || '')
+    .replace('SANDKIND', SANDKIND[kind]?.k || '').replace(/RELIEF/g, SANDKIND[kind]?.relief || '1.0')
+    .replace('RUTCOL', SANDKIND[kind]?.rutcol || '1.0').replace('RUTRGH', SANDKIND[kind]?.rutrgh || 'rgh')
+    .replace('ROCKKIND', ROCKKIND[kind] || '')
     .replace(/POTHOLES\(([^)]*)\)/, (_, a) => POTHOLES(...a.split(',').map((x) => x.trim())))
     .replace(/PUDDLES\(([^)]*)\)/, (_, a) => PUDDLES(...a.split(',').map((x) => x.trim())));
   mat.onBeforeCompile = (sh) => {
@@ -246,9 +290,10 @@ function surfaceMaterial(M, kind, W, quality) {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
 varying vec3 vW; varying vec2 vT; varying float vFade;
-uniform sampler2D tNoise, tA, tP${SETB[kind] ? ', tB, tBP' : ''}; uniform float uHalfW, uWet;
+uniform sampler2D tNoise, tA, tP${SETB[kind] ? ', tB, tBP' : ''}${isSand ? ', tX' : ''}; uniform float uHalfW, uWet${isSand ? ', uExtent' : ''};
 ${KAIELE_GLSL}
-vec3 rN; float rAO; float rR;`)
+${isSand ? SAND_GLSL : ''}
+vec3 rN; float rAO; float rR; vec2 rW = vec2(0.0);`)
       .replace('#include <map_fragment>', /* glsl */`
 float along = vT.x, lat = vT.y;
 vec3 nz = texture(tNoise, vec2(along / 300.0, 0.3)).rgb;
@@ -263,16 +308,18 @@ for (int k = 0; k < 4; k++) {
   rut += g;
   rutD += -2.0 * (l - off) / (w * w) * g;
 }
-vec3 col; vec3 tn; float ao = 1.0, rgh = 0.9, edgeW = 1.0;
+vec3 col; vec3 tn; float ao = 1.0, rgh = 0.9, edgeW = 1.0, gritK = 1.0;
+float camD = length(vW - cameraPosition);
 ${body}
 // close detail: grit
-float camD = length(vW - cameraPosition);
-col *= mix(1.0, mix(0.85, 1.12, texture(tNoise, vW.xz / 0.45).g), (1.0 - smoothstep(5.0, 25.0, camD)) * 0.6);
+col *= mix(1.0, mix(0.85, 1.12, texture(tNoise, vW.xz / 0.45).g), (1.0 - smoothstep(5.0, 25.0, camD)) * 0.6 * gritK);
 // weather: wet roads darken and gloss
 col *= mix(1.0, 0.72, uWet); rgh = mix(rgh, rgh * 0.4, uWet);
 rN = normalize(tn); rAO = ao; rR = rgh;
 diffuseColor.rgb = col;
 float fadeE = 1.0 - smoothstep(uHalfW + 0.3 - edgeW * 0.3, uHalfW + edgeW, abs(lat) + (nzf.b - 0.5) * (2.0 + edgeW));
+// always gone before the ribbon's own edge (1.6 half-widths out), or a wide soft edge shows as a hard line
+fadeE *= 1.0 - smoothstep(uHalfW * 1.6 - 1.2, uHalfW * 1.6 - 0.15, abs(lat));
 diffuseColor.a = fadeE * vFade;
 `)
       .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = clamp(rR, 0.03, 1.0);')
@@ -287,6 +334,7 @@ vec3 Bt = q1p * st0.y + q0p * st1.y;
 float det = max(dot(Tt, Tt), dot(Bt, Bt));
 float isc = det == 0.0 ? 0.0 : inversesqrt(det);
 vec3 wn = normalize(Tt * isc * rN.x + Bt * isc * rN.y + Nw * rN.z);
+wn = normalize(wn + vec3(rW.x, 0.0, rW.y) * Nw.y); // world-space detail (the beach sand's ripples and grain)
 normal = normalize((viewMatrix * vec4(wn, 0.0)).xyz);`)
       .replace('#include <aomap_fragment>', `
 reflectedLight.indirectDiffuse *= rAO;

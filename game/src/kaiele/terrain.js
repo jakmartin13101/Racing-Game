@@ -3,7 +3,8 @@ import * as THREE from 'three';
 const BASE = import.meta.env.BASE_URL;
 const loader = new THREE.TextureLoader();
 
-// packed Kai'ele material set: albedo + roughness (A), and normal XY + AO (see tools/pack_terrain.py)
+// packed Kai'ele material set: albedo + roughness (A), and normal XY + AO (see tools/pack_terrain.py). The sand
+// is packed its own way (tools/kaiele_sand_tex.py): albedo + height, and grain normal XY + wind-ripple normal XY.
 const sets = {};
 export function kaieleSet(name, aniso = 8) {
   if (sets[name]) return sets[name];
@@ -14,7 +15,80 @@ export function kaieleSet(name, aniso = 8) {
     if (srgb) x.colorSpace = THREE.SRGBColorSpace;
     return x;
   };
-  return (sets[name] = { a: t(`${name}_ar.webp`, true), p: t(`${name}_nao.jpg`) });
+  return (sets[name] = { a: t(`${name}_ar.webp`, true), p: t(name === 'sand' ? 'sand_nn.webp' : `${name}_nao.jpg`) });
+}
+
+// The shore field for the sand (4 m texels): R = signed distance from the waterline (m, inland positive; -8..56
+// in 0.25 m steps), G = wave exposure (mean water depth within 60 m: the ocean's run-up scale, ocean.js rs).
+// The beach bands (wet, swash marks, wrack line, dry ripples, dunes) are measured in run-up, as the swash is.
+let shore = null;
+export function kaieleShore(world) {
+  if (shore) return shore;
+  const N = 1024, cell = world.extent / N, half = world.half;
+  const h = new Float32Array(N * N);
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) h[j * N + i] = world.heightAt(-half + (i + 0.5) * cell, -half + (j + 0.5) * cell);
+  // chamfer distance from the far side of the waterline, seeded with a sub-cell estimate where it crosses
+  const BIG = 1e4;
+  const dl = new Float32Array(N * N).fill(BIG), dw = new Float32Array(N * N).fill(BIG);
+  for (let j = 1; j < N - 1; j++) for (let i = 1; i < N - 1; i++) {
+    const k = j * N + i, land = h[k] > 0;
+    if ((h[k - 1] > 0) !== land || (h[k + 1] > 0) !== land || (h[k - N] > 0) !== land || (h[k + N] > 0) !== land) {
+      const g = Math.max(Math.hypot(h[k + 1] - h[k - 1], h[k + N] - h[k - N]) / (2 * cell), 0.02);
+      const e = Math.min(Math.abs(h[k]) / g, cell);
+      // dw: distance to the water (land cells), dl: distance to the land (sea cells)
+      if (land) { dw[k] = e; dl[k] = 0; } else { dl[k] = e; dw[k] = 0; }
+    } else if (land) dl[k] = 0; else dw[k] = 0;
+  }
+  const a = cell, b = cell * Math.SQRT2;
+  const pass = (d) => {
+    for (let j = 1; j < N - 1; j++) for (let i = 1; i < N - 1; i++) {
+      const k = j * N + i;
+      d[k] = Math.min(d[k], d[k - 1] + a, d[k - N] + a, d[k - N - 1] + b, d[k - N + 1] + b);
+    }
+    for (let j = N - 2; j > 0; j--) for (let i = N - 2; i > 0; i--) {
+      const k = j * N + i;
+      d[k] = Math.min(d[k], d[k + 1] + a, d[k + N] + a, d[k + N + 1] + b, d[k + N - 1] + b);
+    }
+  };
+  pass(dl); pass(dw);
+  // exposure: mean depth of the water within 60 m (box filter, as the ocean does)
+  const r = Math.round(60 / cell);
+  const box = (src) => {
+    const t = new Float32Array(N * N), o = new Float32Array(N * N);
+    for (let j = 0; j < N; j++) {
+      let s = 0;
+      for (let i = -r; i <= r; i++) s += src[j * N + Math.min(Math.max(i, 0), N - 1)];
+      for (let i = 0; i < N; i++) { t[j * N + i] = s; s += src[j * N + Math.min(i + r + 1, N - 1)] - src[j * N + Math.max(i - r, 0)]; }
+    }
+    for (let i = 0; i < N; i++) {
+      let s = 0;
+      for (let j = -r; j <= r; j++) s += t[Math.min(Math.max(j, 0), N - 1) * N + i];
+      for (let j = 0; j < N; j++) { o[j * N + i] = s; s += t[Math.min(j + r + 1, N - 1) * N + i] - t[Math.max(j - r, 0) * N + i]; }
+    }
+    return o;
+  };
+  const dep = new Float32Array(N * N), wet = new Float32Array(N * N);
+  for (let k = 0; k < N * N; k++) { dep[k] = Math.max(-h[k], 0); wet[k] = h[k] <= 0 ? 1 : 0; }
+  const bd = box(dep), bw = box(wet);
+  const d = new Uint8Array(N * N * 4);
+  for (let k = 0; k < N * N; k++) {
+    const sd = h[k] > 0 ? dw[k] : -dl[k];
+    const rs = bw[k] > 0.5 ? Math.min(Math.max((bd[k] / bw[k] - 0.1) / 0.65, 0.22), 1.2) : 0.22;
+    d[k * 4] = Math.round(Math.min(Math.max((sd + 8) * 4, 0), 255));
+    d[k * 4 + 1] = Math.round(rs / 1.25 * 255);
+    d[k * 4 + 3] = 255;
+  }
+  shore = new THREE.DataTexture(d, N, N, THREE.RGBAFormat);
+  shore.magFilter = THREE.LinearFilter; shore.minFilter = THREE.LinearFilter;
+  shore.needsUpdate = true;
+  // the same field on the CPU (bilinear, as the texture filters): beach.js scatters its detail by it
+  shore.userData.at = (x, z) => {
+    const fx = Math.min(Math.max((x + half) / cell - 0.5, 0), N - 1.001), fz = Math.min(Math.max((z + half) / cell - 0.5, 0), N - 1.001);
+    const i = Math.floor(fx), j = Math.floor(fz), tx = fx - i, tz = fz - j, k = (j * N + i) * 4;
+    const f = (o) => (d[k + o] * (1 - tx) + d[k + 4 + o] * tx) * (1 - tz) + (d[k + N * 4 + o] * (1 - tx) + d[k + N * 4 + 4 + o] * tx) * tz;
+    return [f(0) / 4 - 8, f(1) / 255 * 1.25];
+  };
+  return shore;
 }
 
 // Shared GLSL for the island's ground and roads: anti-tiled sampling, packed normals, top projection
@@ -28,6 +102,167 @@ vec4 texAT(sampler2D t, vec2 uv, float n) {
 vec3 unpackNP(vec4 c) { vec2 xy = c.xy * 2.0 - 1.0; return vec3(xy, sqrt(max(0.0, 1.0 - dot(xy, xy)))); }
 vec3 topToWorld(vec3 tn, vec3 N) { vec3 t = vec3(tn.xy + N.xz, abs(tn.z) * N.y); return normalize(t.xzy); }
 float lum3(vec3 c) { return dot(c, vec3(0.3, 0.55, 0.15)); }
+`;
+
+// Beach sand, shared by the ground and the sand roads so a road's edge melts into the beach around it. Sampled in
+// world space: the grain scan at two scales and rotations, wind ripples laid across the north-east trade wind at
+// two scales, and everything else procedural, in bands measured in wave run-up from the shore field: a glassy
+// film where the last wave drained, darker damp sand (water fills the grain's hollows first) with swash marks, the
+// wrack line at the reach of the biggest sets, dry rippled sand above, dune hummocks at the back; pebbles, shells
+// and coral bits, and glints on dry grains. Returns albedo, a top-projected tangent normal (x = world x, y = world
+// z), AO, roughness and wetness.
+//   sd, rs: the shore field (m from the waterline, exposure); white: 0 black volcanic .. 1 white coral;
+//   trod: 0..1 traffic (wipes ripples, pebbles and wrack); wetX: forced wetness (rain, the surf line's road)
+export const SAND_GLSL = /* glsl */`
+const vec2 WIND = vec2(-0.7071, 0.7071); // the trade wind blows towards the south-west
+float hash12(vec2 p) { vec3 q = fract(p.xyx * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
+vec2 hash22(vec2 p) { vec3 q = fract(p.xyx * vec3(0.1031, 0.103, 0.0973)); q += dot(q, q.yzx + 33.33); return fract((q.xx + q.yz) * q.zy); }
+struct Sand { vec3 col; vec3 tn; float ao; float rgh; float wet; };
+Sand sandAt(sampler2D sA, sampler2D sN, sampler2D tN, vec3 p, float sd, float rs, float white, float trod, float camD, float wetX) {
+  Sand s;
+  vec2 xz = p.xz;
+  vec3 nb = texture(tN, xz / 31.0).rgb, nm = texture(tN, xz / 8.3).rgb;
+  // ---- grain: the 2.6 m scan anti-tiled, plus a rotated 1.1 m copy close up
+  vec2 uv = xz / 2.6;
+  vec4 A = texAT(sA, uv, nb.g), G = texAT(sN, uv, nb.g);
+  vec3 tn = unpackNP(G);
+  tn.xy *= mix(0.65, 0.4, white); // coral sand is finer and rounder
+  float hgt = A.a;
+  float L = lum3(A.rgb);
+  vec3 hue = A.rgb / max(L, 1e-3) / vec3(1.256, 0.973, 0.586); // grain-to-grain hue around the scan's mean
+#ifndef SAND_LO
+  float nearK = 1.0 - smoothstep(6.0, 28.0, camD);
+  vec2 uv2 = mat2(0.8, -0.6, 0.6, 0.8) * xz / 1.1;
+  vec4 A2 = texture(sA, uv2), G2 = texture(sN, uv2);
+  tn.xy += unpackNP(G2).xy * 0.4 * nearK;
+  L = mix(L, L * lum3(A2.rgb) / 0.268, 0.4 * nearK);
+  hgt = mix(hgt, A2.a, 0.3 * nearK);
+#endif
+  L /= 0.268; // 1 = the scan's mean
+  float ao = mix(0.62, 1.05, hgt);
+  // ---- colour. Black sand: basalt and volcanic glass, charcoal with brown, grey and pale grains. White sand:
+  // coral and shell, warm cream with pink and tan fragments. Broad patches of coarser and finer sand.
+  vec3 blk = vec3(0.064, 0.06, 0.057) * pow(L, 1.25) * mix(vec3(1.0), hue, 0.7);
+  vec3 wht = vec3(0.78, 0.7, 0.56) * mix(1.0, L, 0.3) * mix(vec3(1.0), hue, 0.5);
+  vec3 col = mix(blk, wht, white);
+#ifndef SAND_LO
+  // single grains close up: pale feldspar, olivine and coral grit in the black sand, dark basalt in the white
+  vec2 gq = floor(xz / 0.004);
+  float gh = hash12(gq);
+  float gk = (1.0 - smoothstep(2.0, 9.0, camD));
+  col = mix(col, mix(vec3(0.2, 0.19, 0.16), vec3(0.05, 0.045, 0.04), white), step(mix(0.965, 0.992, white), gh) * gk);
+  col = mix(col, vec3(0.06, 0.08, 0.035), step(0.993, gh) * gk * (1.0 - white));
+#endif
+  col *= mix(0.86, 1.1, smoothstep(0.3, 0.75, nb.r)) * mix(0.93, 1.05, nm.g);
+  // ---- run-up: 0 at the waterline, 1 at the reach of the biggest sets (by distance, or height on a steep beach)
+  float R = 24.0 * rs;
+  float q = max(sd / (R * 1.2), p.y / (1.3 + 1.32 * rs)) + (nb.g - 0.5) * 0.14 + (nm.b - 0.5) * 0.05;
+  float film = 1.0 - smoothstep(0.03, 0.09, q + (nm.r - 0.5) * 0.04);
+  float damp = 1.0 - smoothstep(0.3, 0.52, q + (0.5 - hgt) * 0.05);
+  float wet = max(max(damp, film), wetX);
+  float dryK = smoothstep(1.02, 1.25, q);
+  float back = smoothstep(1.5, 2.3, q) * smoothstep(-2.0, 12.0, sd - 18.0);
+  // ---- trampled: footprints and old wheel marks dimple the dry sand in broad patches
+  vec2 fq = xz / 0.9;
+  float f0 = texture(tN, fq).r, f1 = texture(tN, fq + vec2(0.015, 0.0)).r, f2 = texture(tN, fq + vec2(0.0, 0.015)).r;
+  float stomp = (1.0 - damp) * smoothstep(0.42, 0.62, nb.r * 0.6 + nm.b * 0.5) * (1.0 - back * 0.5) * (1.0 - trod);
+  tn.xy += vec2(f0 - f1, f0 - f2) * 9.0 * stomp;
+  ao *= mix(1.0, 0.85 + 0.3 * f0, stomp);
+  // ---- wind ripples on the dry sand, meandering, worn away in patches; troughs gather the heavy dark grains
+  vec2 rot = vec2(WIND.y, -WIND.x);
+  vec2 ru = vec2(dot(xz, rot), dot(xz, WIND)) + (vec2(nm.r, nm.b) - 0.5) * 0.9;
+  vec4 X = texture(sN, ru / 3.4);
+  float ripK = dryK * (1.0 - trod) * smoothstep(0.3, 0.52, nb.b + nm.g * 0.25) * (1.0 - back * 0.4) * (1.0 - stomp * 0.7);
+  vec2 rn = X.ba * 2.0 - 1.0;
+  tn.xy += (rn.x * rot + rn.y * WIND) * ripK * 1.4;
+  col *= mix(1.0, 1.0 + rn.y * mix(0.35, 0.15, white), ripK);
+#ifndef SAND_LO
+  // larger, more irregular ripples a little off the wind
+  vec4 X2 = texture(sN, mat2(0.97, 0.26, -0.26, 0.97) * ru / 8.5 + 0.31);
+  vec2 rn2 = X2.ba * 2.0 - 1.0;
+  float rip2 = dryK * (1.0 - trod) * smoothstep(0.45, 0.7, nm.g * 0.7 + nb.r * 0.5);
+  vec2 r2 = mat2(0.97, -0.26, 0.26, 0.97) * rn2;
+  tn.xy += (r2.x * rot + r2.y * WIND) * rip2 * 0.9;
+  col *= mix(1.0, 1.0 + rn2.y * 0.2, rip2);
+#endif
+  // ---- dune hummocks at the back of the beach: wind-scoured pale crests, sheltered hollows with plant litter
+  vec2 hq = xz / 9.0;
+  float h0 = texture(tN, hq).g, hx = texture(tN, hq + vec2(0.012, 0.0)).g, hz = texture(tN, hq + vec2(0.0, 0.012)).g;
+  back *= smoothstep(0.3, 0.6, nb.r + nm.g * 0.3); // in patches, not everywhere
+  tn.xy += vec2(h0 - hx, h0 - hz) * 12.0 * back;
+  col *= mix(1.0, mix(0.82, 1.1, smoothstep(0.35, 0.65, h0)), back);
+  col = mix(col, col * vec3(0.78, 0.7, 0.58), back * smoothstep(0.55, 0.35, h0) * smoothstep(0.5, 0.7, nm.r) * 0.6);
+  ao *= mix(1.0, mix(0.75, 1.0, smoothstep(0.3, 0.6, h0)), back);
+  // ---- swash marks: thin arcs of fine grains and foam scum left at each run-up's limit
+  float sy = (q + (nm.g - 0.5) * 0.06) * 9.0;
+  float sw = fwidth(sy) + 1e-4;
+  float sm = fract(sy);
+  float swl = smoothstep(0.0, 0.03 + sw, sm) * (1.0 - smoothstep(0.04, 0.09 + sw * 2.0, sm));
+  swl *= smoothstep(0.08, 0.15, q) * (1.0 - smoothstep(0.9, 1.0, q)) * smoothstep(0.42, 0.6, nm.b + nb.g * 0.3) * (1.0 - trod) * (1.0 - smoothstep(0.05, 0.25, sw));
+  col = mix(col, mix(vec3(0.1, 0.095, 0.09), col * 0.72, white), swl * 0.5);
+  // ---- the wrack line: limu, twigs, palm fibre, shells and coral grit dropped by the highest waves; an older,
+  // patchier line from the last big swell further up
+  float wr = exp(-pow((q - 1.0) / 0.06, 2.0)) + 0.6 * exp(-pow((q - 1.3) / 0.045, 2.0)) * step(0.45, nb.b);
+  float clump = smoothstep(0.42, 0.66, texture(tN, xz / 1.4).r * 0.7 + nm.g * 0.5);
+  float wrack = clamp(wr * clump, 0.0, 1.0) * (1.0 - trod);
+  float fib = texture(tN, mat2(0.6, 0.8, -0.8, 0.6) * xz * vec2(3.0, 0.9)).b;
+  // fresh limu dark olive, sun-dried limu and palm fibre tan, twigs bleached grey
+  vec3 limu = mix(vec3(0.05, 0.04, 0.02), vec3(0.035, 0.05, 0.02), smoothstep(0.4, 0.6, nm.r));
+  limu = mix(limu, vec3(0.2, 0.15, 0.085), smoothstep(0.5, 0.62, fib) * smoothstep(0.3, 0.6, nb.r + 0.2));
+  limu = mix(limu, vec3(0.32, 0.3, 0.27), smoothstep(0.68, 0.74, fib));
+  float wk = wrack * smoothstep(0.36, 0.52, fib + clump * 0.2);
+  col = mix(col, limu, wk);
+  tn.xy += (vec2(fib, texture(tN, xz * 1.7).g) - 0.5) * 1.6 * wk;
+  ao *= 1.0 - wk * 0.35;
+  // shell and coral grit strewn along the line
+  float grit = step(0.9, hash12(floor(xz / 0.018))) * clamp(wr, 0.0, 1.0) * (1.0 - trod) * (1.0 - smoothstep(10.0, 30.0, camD));
+  col = mix(col, vec3(0.62, 0.58, 0.5), grit * 0.8);
+  float rgh = 0.92;
+  // ---- pebbles: rounded lava pebbles on the black beach, coral rubble and shells on the white one, gathered on the
+  // swash slope and along the wrack, sparse elsewhere; domed normals and contact shadows
+  float pebK = (0.03 + 0.45 * wr + 0.18 * damp * (1.0 - film)) * smoothstep(0.35, 0.65, nm.b * 0.6 + nb.r * 0.6) * (1.0 - trod);
+#ifndef SAND_LO
+  if (camD < 70.0 && pebK > 0.01) {
+    vec2 gp = xz / 0.24, gi = floor(gp), gf = fract(gp);
+    for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
+      vec2 id = gi + vec2(i, j);
+      float r = hash12(id);
+      if (r > pebK) continue;
+      vec2 hh = hash22(id + 17.0);
+      vec2 d = gf - vec2(i, j) - 0.2 - hh * 0.6;
+      float an = hh.x * 6.283, rad = 0.08 + 0.2 * fract(r * 37.0);
+      d = mat2(cos(an), sin(an), -sin(an), cos(an)) * d * vec2(1.0, 1.5);
+      float qd = length(d) / rad;
+      if (qd < 1.35) {
+        float kind = fract(r * 91.0 + hh.y);
+        // black beach: mostly lava pebbles, a few coral bits; white beach the other way round
+        bool lava = kind < mix(0.85, 0.15, white);
+        vec3 pc = lava ? vec3(0.03, 0.029, 0.028) * (0.7 + hh.y * 0.8) : mix(vec3(0.7, 0.66, 0.58), vec3(0.72, 0.52, 0.47), step(0.8, fract(kind * 7.0)));
+        float in1 = 1.0 - smoothstep(0.85, 1.0, qd);
+        float dome = sqrt(max(0.0, 1.0 - qd * qd));
+        col = mix(col, pc, in1);
+        tn.xy = mix(tn.xy, d / rad * 0.7 / max(dome, 0.25), in1);
+        ao *= mix(1.0, 0.55 + 0.45 * smoothstep(1.0, 1.35, qd), 1.0 - in1);
+        rgh = mix(rgh, lava ? mix(0.5, 0.12, wet) : mix(0.7, 0.3, wet), in1);
+      }
+    }
+  }
+  // ---- glints: now and then a grain's facet catches the sun (volcanic glass more than coral)
+  vec2 gc = floor(xz / 0.011);
+  float gl = step(0.985, hash12(gc)) * (1.0 - wet) * (1.0 - smoothstep(3.0, 18.0, camD)) * mix(1.0, 0.4, white);
+  tn.xy = mix(tn.xy, (hash22(gc + 5.3) - 0.5) * 1.2, gl);
+  rgh = mix(rgh, 0.08, gl);
+#endif
+  // ---- wet: darker, smoother, glossy; where the last wave drained a film of water mirrors the sky
+  col *= mix(1.0, mix(0.5, 0.62, white), wet);
+  col *= mix(1.0, mix(0.8, 0.88, white), film);
+  rgh = mix(rgh, mix(0.24, 0.34, white) - (hgt - 0.5) * 0.2, wet);
+  rgh = mix(rgh, 0.05, film);
+  tn.xy *= mix(1.0, 0.3, wet) * mix(1.0, 0.3, film);
+  ao = mix(ao, 1.0, film * 0.6);
+  s.col = col; s.tn = normalize(vec3(tn.xy, max(tn.z, 0.2))); s.ao = ao; s.rgh = rgh; s.wet = wet;
+  return s;
+}
 `;
 
 // The lava thread may bake fresh flows (R fresh cover, G 'a'a share); the dev server answers a missing file with
@@ -174,10 +409,12 @@ export async function buildIslandTerrain(world, M, quality) {
     tNH: { value: tNH }, tBiome: { value: biome }, tNoise: { value: M.noise }, uExtent: { value: extent },
     sandA: { value: S.sand.a }, sandP: { value: S.sand.p }, grsA: { value: S.grass.a }, grsP: { value: S.grass.p },
     litA: { value: S.litter.a }, litP: { value: S.litter.p }, dirA: { value: S.dirt.a }, dirP: { value: S.dirt.p },
-    rokA: { value: S.rock.a }, rokP: { value: S.rock.p },
+    rokA: { value: S.rock.a }, rokP: { value: S.rock.p }, tShore: { value: kaieleShore(world) },
     uWet: { value: 0 }, uSnowLine: { value: 600 },
   };
   mat.userData.uniforms = uniforms;
+  // low preset (phones; main.js tells it by the terrain step): one grain scale, no pebbles, glints or larger ripples
+  if (quality.terrainStep > 3) mat.defines = { SAND_LO: '' };
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, uniforms);
     sh.vertexShader = sh.vertexShader
@@ -186,10 +423,11 @@ export async function buildIslandTerrain(world, M, quality) {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
 varying vec3 vW;
-// 13 samplers + shadow map + environment: within the 16 units many GPUs allow
-uniform sampler2D tNH, tBiome, tNoise, sandA, sandP, grsA, grsP, litA, litP, dirA, dirP, rokA, rokP;
+// 14 samplers + shadow map + environment: the 16 units many GPUs allow
+uniform sampler2D tNH, tBiome, tNoise, tShore, sandA, sandP, grsA, grsP, litA, litP, dirA, dirP, rokA, rokP;
 uniform float uExtent, uWet, uSnowLine;
 ${KAIELE_GLSL}
+${SAND_GLSL}
 vec3 gN; float gAO; float gR;`)
       .replace('#include <map_fragment>', /* glsl */`
 vec2 wuv = vW.xz / uExtent + 0.5;
@@ -238,17 +476,11 @@ wDirt *= 1.0 - smoothstep(0.6, 0.95, bm.b) * 0.7;
 float snow = smoothstep(uSnowLine, uSnowLine + 40.0, y + nz.r * 40.0 + nz2.g * 10.0) * (1.0 - wCliff * 0.6);
 
 // ---- sand: black volcanic on the south beach, white coral at the north cove, wet and glossy at the waterline
-vec2 uvS = vW.xz / 4.0;
-vec4 sA = texAT(sandA, uvS, nz2.g); vec4 sP = texAT(sandP, uvS, nz2.g);
-float sL = lum3(sA.rgb);
-vec3 blackSand = vec3(0.05, 0.048, 0.046) * (0.6 + sL * 1.2) + vec3(0.02) * smoothstep(0.75, 0.9, texture(tNoise, vW.xz / 0.35).g);
-vec3 whiteSand = sA.rgb * vec3(1.35, 1.32, 1.2);
-vec3 sandC = mix(blackSand, whiteSand, smoothstep(0.2, 0.7, bm.g));
-float wetS = 1.0 - smoothstep(0.5, 1.5, y + (nzm.r - 0.5) * 0.6);
-wetS = max(wetS, uWet);
-sandC *= mix(1.0, mix(0.62, 0.72, bm.g), wetS);
-float sandR = mix(mix(0.62, 0.85, bm.g) + (sA.a - 0.5) * 0.2, mix(0.16, 0.3, bm.g), wetS);
-vec3 sandN = normalize(mix(unpackNP(sP), vec3(0.0, 0.0, 1.0), wetS * 0.6));
+vec2 sh = texture(tShore, wuv).rg;
+Sand sd = sandAt(sandA, sandP, tNoise, vW, sh.r * 64.0 - 8.0, sh.g * 1.25, smoothstep(0.2, 0.7, bm.g), 0.0, camD, uWet);
+vec3 sandC = sd.col;
+float sandR = sd.rgh;
+vec3 sandN = sd.tn;
 
 // ---- grass on the headlands and plateau, two tones, yellowing on the dry upper slopes
 vec2 uvG = vW.xz / 3.0;
@@ -333,7 +565,7 @@ col = mix(col, dirtC, wDirt * land);
 tn = normalize(mix(tn, dTN, wDirt * land)); ao = mix(ao, dP.b, wDirt * land);
 // sea floor near the shore: dark sand and silt
 float sub = 1.0 - land;
-col = mix(col, blackSand * 0.8, sub);
+col = mix(col, sandC * 0.8, sub);
 // old lava rock and the reef shelf (wet algae on rock just under and at sea level)
 float wRock = max(wRockB, sub * 0.5 * smoothstep(0.4, 0.7, nz2.r));
 float reef = (1.0 - smoothstep(0.1, 0.9, y)) * smoothstep(-5.0, -0.6, y) * max(bm.a, 1.0 - wSand);
@@ -344,7 +576,7 @@ col = mix(col, rockC, wRock);
 tn = normalize(mix(tn, rockTopN, wRock)); ao = mix(ao, rP.b, wRock);
 rgh = mix(rgh, mix(0.75, 0.25, max(reef, coast * (1.0 - smoothstep(0.6, 2.0, y)))), wRock);
 col = mix(col, sandC, wSand);
-tn = normalize(mix(tn, sandN, wSand)); ao = mix(ao, sP.b, wSand); rgh = mix(rgh, sandR, wSand);
+tn = normalize(mix(tn, sandN, wSand)); ao = mix(ao, sd.ao, wSand); rgh = mix(rgh, sandR, wSand);
 col = mix(col, col * vec3(0.25, 0.3, 0.32), pool * wRock); rgh = mix(rgh, 0.05, pool * wRock);
 tn = normalize(mix(tn, vec3(0.0, 0.0, 1.0), pool * wRock));
 
@@ -367,7 +599,7 @@ float midK = smoothstep(12.0, 40.0, camD) * (1.0 - smoothstep(150.0, 400.0, camD
 col *= mix(1.0, mix(0.82, 1.1, nzm.r) * mix(0.93, 1.05, nzm.b), midK);
 // near: grit and pebbles
 float grit = texture(tNoise, vW.xz / 0.55).g;
-col *= mix(1.0, mix(0.8, 1.15, smoothstep(0.35, 0.8, grit)), (1.0 - smoothstep(6.0, 30.0, camD)) * 0.5 * (1.0 - wSand * 0.6));
+col *= mix(1.0, mix(0.8, 1.15, smoothstep(0.35, 0.8, grit)), (1.0 - smoothstep(6.0, 30.0, camD)) * 0.5 * (1.0 - wSand));
 
 // snow on the summit
 vec3 snowC = vec3(0.86, 0.88, 0.92) * mix(0.9, 1.04, nzm.g);

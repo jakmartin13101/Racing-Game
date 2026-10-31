@@ -1,7 +1,9 @@
 Kai'ele ground, road and sky textures. All sources are CC0 1.0 (public domain); shrunk to 1K and packed
 (<key>_ar.webp: albedo + roughness in alpha; <key>_nao.jpg: normal XY + ambient occlusion).
 
-sand     ambientCG Ground093C        https://ambientcg.com/a/Ground093C
+sand     ambientCG Ground054 (grain: albedo + height, normal)  https://ambientcg.com/a/Ground054
+         ambientCG Ground055S (wind ripples, normal)           https://ambientcg.com/a/Ground055S
+         packed by tools/kaiele_sand_tex.py: sand_ar.webp (2K albedo + height), sand_nn.webp (1K both normals)
 grass    ambientCG Grass004          https://ambientcg.com/a/Grass004
 litter   ambientCG Ground023         https://ambientcg.com/a/Ground023
 dirt     ambientCG Ground053         https://ambientcg.com/a/Ground053

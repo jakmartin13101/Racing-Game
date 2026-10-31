@@ -6,6 +6,7 @@ import { buildKaieleSky } from './sky.js';
 import { buildOcean } from './ocean.js';
 import { buildFreshWater } from './water.js';
 import { buildVegetation } from './vegetation.js';
+import { buildBeach } from './beach.js';
 import { TRACK_EVENTS } from './tracks.js';
 export { KaieleHazards } from './hazards.js';
 
@@ -34,6 +35,7 @@ export async function buildKaiele(ctx) {
   world.groundAt = world.heightAt;
   const veg = await buildVegetation(ctx);
   parts.push(veg);
+  parts.push(buildBeach(ctx));
   const props = { handles: [], models: {}, update() {} };
   const colliders = [...(veg.colliders || [])];
   const events = {};

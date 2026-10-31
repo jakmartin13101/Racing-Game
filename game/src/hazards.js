@@ -4,6 +4,7 @@ import { mulberry } from './world.js';
 import { Eruption } from './eruption.js';
 import { Bridge } from './bridge.js';
 import { makeSlab, Chips, crackCanvas } from './quake.js';
+import { lavaTrackHazards } from './kaiele/lavatracks.js';
 
 // Track action: volcanic bombs raining on the village (and the upper summit road), boulders rolling off the
 // slopes on the summit sprint, and on Caldera Loop a lava breakout after lap one with the ground heaving up
@@ -90,7 +91,13 @@ export class Hazards {
     // the finale: heaving ground and breakouts on the climb, the crater leap, the lava chasing the pack down
     if (id === 'eruption') { this.erupt = new Eruption(this, lava, (opts) => new LavaBreakout(this, lava, opts)); this.env = 0; }
     if (track.bridge) this.bridge = new Bridge({ phys, scene, track, world, M });
+    // Kai'ele's lava tracks (Kula Pele, Ahi i ke Kai) bring their own hazards and set pieces
+    this.kaiele = lavaTrackHazards(this, lava);
+    if (this.kaiele) { this.bombCfg = this.kaiele.bombCfg ?? { gap: [1e9, 1e9], big: 0, from: 2 }; this.rockfall = !!this.kaiele.rockfall; }
   }
+
+  // HUD: metres back to a lava front chasing the player (Eruption's descent, Ahi i ke Kai)
+  get lavaGap() { return this.erupt?.gap ?? this.kaiele?.lavaGap ?? null; }
 
   // before the physics step: spawn, steer kinematic bodies
   pre(dt, race) {
@@ -110,6 +117,8 @@ export class Hazards {
     }
     this.lava?.pre(dt, race, time);
     this.erupt?.pre(dt, race, time);
+    this.kaiele?.pre(dt, race, time);
+    if (this.kaiele?.env != null) this.env = this.kaiele.env;
   }
 
   pickTarget(race, ahead, from = this.bombCfg.from) {
@@ -230,6 +239,7 @@ export class Hazards {
     this.marks = this.marks.filter((m) => { if (m.age > 40) { this.group.remove(m.mesh); m.mesh.material.dispose(); return false; } return true; });
     this.lava?.post(dt, race, time);
     this.erupt?.post(dt, race, time);
+    this.kaiele?.post(dt, race, time);
     this.chips.update(dt);
     this.bridge?.update(time);
   }
@@ -283,6 +293,7 @@ export class Hazards {
     for (const r of this.boulders) if (r.body) this.phys.removeRigidBody(r.body);
     this.lava?.dispose();
     this.erupt?.dispose();
+    this.kaiele?.dispose();
     this.bridge?.dispose(this.phys, this.scene);
     this.scene.remove(this.group);
   }

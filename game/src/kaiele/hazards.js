@@ -13,6 +13,8 @@ export class KaieleHazards {
 
   // the lava rounds' chase: how far back the flow is (shown on the HUD)
   get lavaGap() { return this.mod?.lavaGap; }
+  // a lava round's darkening sky and reddening fog (0..1)
+  get env() { return this.mod?.env; }
 
   pre(dt, race) {
     for (const st of race.cars) {

@@ -6,4 +6,6 @@ export const TRACK_EVENTS = {
   kahakai: () => import('./kahakai.js'),
   wailele: () => import('./wailele.js'),
   palikai: () => import('./palikai.js'),
+  kulapele: () => import('./lavaevents.js'),
+  ahikekai: () => import('./lavaevents.js'),
 };

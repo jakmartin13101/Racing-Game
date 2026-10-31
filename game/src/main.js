@@ -305,7 +305,7 @@ function updateHud(dt) {
   hud.rpm.style.width = `${Math.round(Math.min(1, st.v.rpm / 7000) * 100)}%`;
   hud.boost.style.width = `${Math.round(st.v.boost * 100)}%`;
   // Eruption's descent: how far back the lava is
-  const lg = race.hazards?.erupt?.gap;
+  const lg = race.hazards?.lavaGap ?? race.hazards?.erupt?.gap;
   hud.lavagap.hidden = lg == null;
   if (lg != null) { hud.lavagap.textContent = `LAVA ${Math.round(lg)} M`; hud.lavagap.classList.toggle('near', lg < 45); }
   // running order, top four plus the player
@@ -355,7 +355,7 @@ function raceEvents() {
       else if (!me && !e.st.v.damage.blown) toast(`${e.st.v.name} is wrecked`);
     } else if (e.type === 'dnf' && me) { if (!e.st.burned) bigMsg('DNF'); }
     else if (e.type === 'leap') {
-      if (me) { leapSlow = e.leap; rig.leapShot(e.leap, world.data.crater); if (e.leap.short) bigMsg('TOO SLOW!', 3); }
+      if (me) { leapSlow = e.leap; rig.leapShot(e.leap, e.focus ?? world.data.crater); if (e.leap.short) bigMsg('TOO SLOW!', 3); }
       rig.bump(me ? 0.35 : 0.08);
     } else if (e.type === 'landed' && me) { if (leapSlow) leapSlow.done = true; rig.leapShot(null); rig.bump(0.3); }
     else if (e.type === 'burned') {

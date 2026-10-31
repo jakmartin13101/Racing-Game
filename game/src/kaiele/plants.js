@@ -80,7 +80,7 @@ class Mesher {
 
   // a leaf card along a spine (Vector3[]), with its edges dropped by fold * half width into a V (leaflets hang
   // from the midrib); normals blend the card's own with "out from the plant" so the crown shades as one mass
-  ribbon(spine, hw, c, col, { fold = 0.3, centre = null, flut = 1, side = null, roll = 0 } = {}) {
+  ribbon(spine, hw, c, col, { fold = 0.3, foldTip = null, centre = null, bentK = 0.55, flut = 1, side = null, roll = 0, aoBase = 1 } = {}) {
     const S = spine.length - 1;
     const rows = [];
     for (let k = 0; k <= S; k++) {
@@ -93,13 +93,18 @@ class Mesher {
       let dn = sd.clone().cross(tan).normalize();
       if (dn.y > 0) dn.negate();
       const w = hw * (k === 0 ? 0.6 : 1);
-      const L = spine[k].clone().addScaledVector(sd, w).addScaledVector(dn, fold * w);
-      const R = spine[k].clone().addScaledVector(sd, -w).addScaledVector(dn, fold * w);
+      // leaflets hang from the midrib: the V deepens towards the tip
+      const fd = foldTip === null ? fold : fold + (foldTip - fold) * t;
+      const L = spine[k].clone().addScaledVector(sd, w).addScaledVector(dn, fd * w);
+      const R = spine[k].clone().addScaledVector(sd, -w).addScaledVector(dn, fd * w);
       const nn = dn.clone().negate();
-      if (centre) nn.multiplyScalar(0.45).add(spine[k].clone().sub(centre).normalize().multiplyScalar(0.55)).add(V(0, 0.35, 0)).normalize();
+      if (centre) nn.multiplyScalar(1 - bentK).add(spine[k].clone().sub(centre).normalize().multiplyScalar(bentK)).add(V(0, 0.3, 0)).normalize();
       const v = c.v0 + (c.v1 - c.v0) * t, uc = (c.u0 + c.u1) / 2;
       const f = flut * Math.pow(t, 1.3);
-      rows.push([this.v(L, nn, c.u0, v, col, f), this.v(spine[k], nn, uc, v, col, f * 0.6), this.v(R, nn, c.u1, v, col, f)]);
+      // darker where the frond leaves the crown (shaded by the others)
+      const ao = aoBase + (1 - aoBase) * Math.min(1, t * 2.2);
+      const cc = [col[0] * ao, col[1] * ao, col[2] * ao];
+      rows.push([this.v(L, nn, c.u0, v, cc, f), this.v(spine[k], nn, uc, v, cc, f * 0.6), this.v(R, nn, c.u1, v, cc, f)]);
     }
     for (let k = 0; k < S; k++) {
       const a = rows[k], b = rows[k + 1];
@@ -109,12 +114,16 @@ class Mesher {
   }
 
   // a flat card: base point, right and up vectors (full width / height), normal mode
-  card(base, right, up, c, col, { centre = null, flut = 0.6, n = null, centred = false } = {}) {
+  card(base, right, up, c, col, { centre = null, crown = null, flut = 0.6, n = null, centred = false } = {}) {
     const o = centred ? base.clone().addScaledVector(up, -0.5) : base;
     const nf = n || right.clone().cross(up).normalize();
+    // normals bent out of the cluster and, more, out of the whole crown: the crown shades as one leafy mass and a
+    // card seen edge-on has no flat face to give it away
     const nrm = (p) => {
       if (!centre) return nf;
-      return p.clone().sub(centre).normalize().multiplyScalar(0.7).add(V(0, 0.45, 0)).normalize();
+      const a = p.clone().sub(centre).normalize();
+      if (crown) a.multiplyScalar(0.35).add(p.clone().sub(crown.c).divide(crown.r).normalize().multiplyScalar(0.65));
+      return a.add(V(0, 0.3, 0)).normalize();
     };
     const p0 = o.clone().addScaledVector(right, -0.5), p1 = o.clone().addScaledVector(right, 0.5);
     const p2 = p1.clone().add(up), p3 = p0.clone().add(up);
@@ -124,7 +133,7 @@ class Mesher {
   }
 
   sphere(c, r, k, col) {
-    const ico = new THREE.IcosahedronGeometry(1, 0);
+    const ico = new THREE.IcosahedronGeometry(1, 1);
     const p = ico.attributes.position;
     const u0 = k / 8 + 0.01;
     for (let i = 0; i < p.count; i += 3) {
@@ -142,9 +151,10 @@ class Mesher {
 // little bigger to keep the crown as dense; fewer trunk sides and rings). Both draw the same random plant.
 class Dual {
   constructor(H) { this.hi = new Mesher(H); this.lo = new Mesher(H); }
-  tube(pts, rad, sides, k, col, vPerM, cap) {
+  tube(pts, rad, sides, k, col, vPerM, cap, keep = true) {
     this.hi.tube(pts, rad, sides, k, col, vPerM, cap);
-    const lp = pts.length > 4 ? pts.filter((_, i) => i % 2 === 0 || i === pts.length - 1) : pts;
+    if (!keep) return;
+    const lp = pts.length > 3 ? pts.filter((_, i) => i % 2 === 0 || i === pts.length - 1) : pts;
     if (sides >= 5 || pts.length > 3) this.lo.tube(lp, rad, Math.max(4, Math.round(sides * 0.6)), k, col, vPerM, cap);
   }
   ribbon(spine, hw, c, col, o, keep = true) {
@@ -179,47 +189,54 @@ function arch(start, az, el, L, droop, segs) {
 }
 
 // ------------------------------------------------------------------ coconut palm
-// leans towards +x (the placer turns that seaward); the trunk curves back up towards the light
+// leans towards +x (the placer turns that seaward); the slender grey ringed trunk curves back up towards the light
+// and carries a full crown of long arching fronds whose leaflets hang in a deepening V, and a bunch of coconuts
 export function palm(rnd, { H = 14, lean = 0.25, detail = 1 } = {}) {
   const bark = new Dual(H), leaves = new Dual(H);
-  const N = 12;
+  const N = 14;
   const pts = [];
   let p = V(), ang = lean;
-  const wob = rnd() * 6.28;
+  const wob = rnd() * 6.28, curl = 0.6 + rnd() * 0.5;
   for (let k = 0; k <= N; k++) {
     const t = k / N;
     pts.push(p.clone());
-    ang = lean * (1 - 0.7 * t * t) + 0.04 * Math.sin(t * 7 + wob);
-    p = p.clone().add(V(Math.sin(ang), Math.cos(ang), 0.05 * Math.sin(t * 5 + wob)).multiplyScalar(H / N / Math.cos(lean * 0.6)));
+    // leans out low, then bends back up: the classic beach palm curve
+    ang = lean * (1.15 - curl * t * t) + 0.035 * Math.sin(t * 7 + wob);
+    p = p.clone().add(V(Math.sin(ang), Math.cos(ang), 0.06 * Math.sin(t * 4 + wob)).multiplyScalar(H / N / Math.cos(lean * 0.6)));
   }
-  const R0 = 0.16 + rnd() * 0.06;
-  bark.tube(pts, (t) => R0 * (1 + 0.7 * Math.pow(1 - t, 10)) * (1 - 0.28 * t), 8, STRIP.palm, tint(rnd, [1, 1, 1], 0.08), 0.09);
+  const R0 = 0.15 + rnd() * 0.04;
+  // a swollen foot (the root bole), then a slim trunk tapering a little to the crown
+  bark.tube(pts, (t) => R0 * (1 + 0.85 * Math.pow(1 - t, 14) + 0.15 * Math.pow(1 - t, 3)) * (1 - 0.22 * t), 10, STRIP.palm, tint(rnd, [1, 1, 1], 0.06), 0.1);
   const top = pts[N].clone();
   const tdir = pts[N].clone().sub(pts[N - 1]).normalize();
-  // the crown shaft wrapped in old leaf sheaths
-  bark.tube([top.clone().addScaledVector(tdir, -0.5), top.clone(), top.clone().addScaledVector(tdir, 0.55)], (t) => R0 * (1.25 + 0.35 * Math.sin(t * Math.PI)), 7, STRIP.sheath, [0.9, 0.85, 0.8], 0.4, true);
-  const C = top.clone().addScaledVector(tdir, 0.35);
-  // coconuts hang in a bunch just under the fronds
-  const nuts = Math.floor(rnd() * 9);
-  for (let k = 0; k < nuts; k++) {
-    const a = rnd() * 6.28, r = 0.25 + rnd() * 0.15;
-    const col = rnd() < 0.7 ? tint(rnd, [1, 1, 1], 0.1) : [1.3, 1.1, 0.5];
-    bark.sphere(C.clone().add(V(Math.cos(a) * r, -0.35 - rnd() * 0.35, Math.sin(a) * r)), 0.12 + rnd() * 0.04, STRIP.husk, col);
+  // the crown shaft wrapped in old leaf sheaths and fibre
+  bark.tube([top.clone().addScaledVector(tdir, -0.6), top.clone(), top.clone().addScaledVector(tdir, 0.5)], (t) => R0 * (1.2 + 0.45 * Math.sin(t * Math.PI)), 8, STRIP.sheath, [0.85, 0.8, 0.72], 0.4, true);
+  const C = top.clone().addScaledVector(tdir, 0.3);
+  // coconuts in a bunch or two just under the fronds: green, yellow and ripening brown
+  const bunches = 1 + Math.floor(rnd() * 2.5);
+  for (let b = 0; b < bunches; b++) {
+    const ba = rnd() * 6.28, n = 4 + Math.floor(rnd() * 7);
+    const bc = [[0.85, 1.05, 0.55], [1.3, 1.15, 0.5], [0.75, 0.6, 0.4]][Math.floor(rnd() * 3)];
+    for (let k = 0; k < n; k++) {
+      const a = ba + (rnd() - 0.5) * 1.4, r = 0.22 + rnd() * 0.18;
+      bark.sphere(C.clone().add(V(Math.cos(a) * r, -0.3 - rnd() * 0.45, Math.sin(a) * r)), 0.13 + rnd() * 0.05, STRIP.husk, tint(rnd, bc, 0.08));
+    }
   }
   // fronds in a spiral: young ones stand up, old ones droop; the oldest hang dead down the trunk
-  const F = 19 + Math.floor(rnd() * 5);
-  const segs = 7;
-  const scale = Math.min(1, 0.55 + H / 22);
+  const F = 24 + Math.floor(rnd() * 7);
+  const segs = 9;
+  const scale = Math.min(1.1, 0.6 + H / 22);
   for (let f = 0; f < F; f++) {
     const age = f / (F - 1);
     const az = f * 2.39996 + rnd() * 0.3;
-    const el = THREE.MathUtils.lerp(1.15, -0.45, age) + (rnd() - 0.5) * 0.25;
-    const L = (3.6 + rnd() * 1.6) * scale * (age < 0.1 ? 0.7 : 1);
-    const droop = 0.35 + 0.9 * age + rnd() * 0.3;
+    const el = THREE.MathUtils.lerp(1.2, -0.35, age) + (rnd() - 0.5) * 0.25;
+    const L = (4.3 + rnd() * 1.6) * scale * (age < 0.12 ? 0.65 : 1);
+    const droop = 0.5 + 1.1 * age + rnd() * 0.35;
     const spine = arch(C.clone().add(dirFrom(az, 0).multiplyScalar(0.12)), az, el, L, droop, segs);
-    const old = age > 0.82 && rnd() < 0.5;
-    const col = old ? tint(rnd, [1.0, 0.95, 0.8], 0.1) : tint(rnd, [0.95, 1, 0.9], 0.1);
-    leaves.ribbon(spine, L * 0.19, old ? CELLS.palmOld : CELLS.palm, col, { fold: 0.55, centre: C, flut: 1, roll: (rnd() - 0.5) * 0.6 }, f % 3 !== 2);
+    const old = age > 0.85 && rnd() < 0.55;
+    const col = old ? tint(rnd, [1.0, 0.93, 0.78], 0.1) : tint(rnd, [0.96, 1, 0.92], 0.12);
+    leaves.ribbon(spine, L * 0.21, old ? CELLS.palmOld : CELLS.palm, col,
+      { fold: 0.5, foldTip: 1.25, centre: C, bentK: 0.5, flut: 1, roll: (rnd() - 0.5) * 0.7, aoBase: 0.55 }, f % 3 !== 2);
   }
   const dead = Math.floor(rnd() * 4);
   for (let f = 0; f < dead; f++) {
@@ -227,12 +244,12 @@ export function palm(rnd, { H = 14, lean = 0.25, detail = 1 } = {}) {
     const spine = arch(C.clone().add(dirFrom(az, 0).multiplyScalar(0.2)), az, -1.25 - rnd() * 0.25, L, 0.15, 3);
     leaves.ribbon(spine, L * 0.12, CELLS.palmOld, [0.62, 0.45, 0.3], { fold: 0.2, centre: C, flut: 0.3, roll: rnd() * 2 }, f === 0);
   }
-  return Dual.prototype.out(bark, leaves, { H: top.y + 1, trunkR: R0 * 1.4 });
+  return Dual.prototype.out(bark, leaves, { H: top.y + 1.5, trunkR: R0 * 1.4 });
 }
 
 // ------------------------------------------------------------------ rainforest canopy tree
-// buttressed trunk, a few big limbs, and an umbrella of leaf-spray clusters. over > 0 pushes the crown towards +x
-// (the canopy tunnel trees reach out over the road); vines hang from under the limbs
+// buttressed trunk, a few big limbs that fork, and a dome of many small leaf clusters on their tips. over > 0
+// pushes the crown towards +x (the canopy tunnel trees reach out over the road); vines hang from under the limbs
 export function canopyTree(rnd, { H = 22, spread = 9, pale = false, over = 0, lean = 0, vines = 0, detail = 1, clusterK = 1, low = false } = {}) {
   const bark = new Dual(H), leaves = new Dual(H);
   // low: a sprawling coastal tree (hau, kamani) that branches close to the ground
@@ -252,55 +269,74 @@ export function canopyTree(rnd, { H = 22, spread = 9, pale = false, over = 0, le
     return base * (1 + 2.2 * b * b * Math.pow(Math.max(0, Math.cos(fins * th / 2 + fph)), 4) + 0.35 * b);
   }, sides, STRIP.bark, tint(rnd, [1, 1, 1], 0.08), 0.12);
   const top = trunk[8];
-  const crown = [];
-  const cR = (2.4 + H * 0.07) * clusterK;
-  // limbs: rise out from the trunk top and level off; over-hanging trees send most of them one way
+  const tips = [];
+  const cR = (2.6 + H * 0.08) * clusterK;
+  // limbs: rise out from the trunk top and level off, forking twice; over-hanging trees send most of them one way
   const nb = 4 + Math.floor(rnd() * 3);
+  const limb = (p0, az, el, L, r0, depth) => {
+    const pts = [p0];
+    for (let k = 1; k <= 3; k++) pts.push(pts[k - 1].clone().addScaledVector(dirFrom(az + (rnd() - 0.5) * 0.3, el * (1 - 0.5 * k / 3)), L / 3));
+    // the forks are too thin to see from the middle distance: the light model keeps only the main limbs
+    bark.tube(pts, (t) => r0 * (1 - 0.6 * t) + 0.03, depth ? (depth > 1 ? 3 : 4) : 6, STRIP.root, [1, 1, 1], 0.2, false, depth === 0);
+    if (depth >= 2) { tips.push(pts[3]); return; }
+    tips.push(pts[2].clone().add(V(0, cR * 0.3, 0)));
+    for (const s of [-1, 1]) limb(pts[3], az + s * (0.45 + rnd() * 0.4), el * 0.8 + 0.15, L * (0.45 + rnd() * 0.15), r0 * 0.45, depth + 1);
+  };
   for (let b = 0; b < nb; b++) {
     let az = (b / nb) * 6.28 + rnd() * 0.6;
     if (over > 0 && b < nb - 1) az = (rnd() - 0.5) * 2.2;
-    const L = spread * (0.55 + rnd() * 0.45) * (over > 0 && b < nb - 1 ? 1 + over : 1);
-    const el = low ? 0.3 + rnd() * 0.3 : 0.5 + rnd() * 0.45;
-    const pts = [top.clone().add(V(0, -hb * 0.12 * rnd(), 0))];
-    for (let k = 1; k <= 4; k++) {
-      const e = el * (1 - 0.6 * k / 4);
-      pts.push(pts[k - 1].clone().addScaledVector(dirFrom(az, e), L / 4));
-    }
-    bark.tube(pts, (t) => R0 * 0.55 * (1 - 0.75 * t) + 0.04, 6, STRIP.root, [1, 1, 1], 0.2);
-    crown.push(pts[4], pts[2].clone().add(V(0, cR * 0.4, 0)));
-    // a side branch off the middle of the limb
-    if (true) {
-      const a2 = az + (rnd() < 0.5 ? 0.9 : -0.9);
-      const q = [pts[2].clone(), pts[2].clone().addScaledVector(dirFrom(a2, 0.5), L * 0.35)];
-      bark.tube(q, (t) => R0 * 0.25 * (1 - 0.6 * t) + 0.03, 4, STRIP.root, [1, 1, 1], 0.2);
-      crown.push(q[1]);
-    }
+    const L = spread * (0.42 + rnd() * 0.3) * (over > 0 && b < nb - 1 ? 1 + over : 1);
+    const el = low ? 0.3 + rnd() * 0.3 : 0.55 + rnd() * 0.4;
+    limb(top.clone().add(V(0, -hb * 0.12 * rnd(), 0)), az, el, L, R0 * 0.55, 0);
   }
-  crown.push(top.clone().add(V(0, H - top.y - cR * 0.6, 0)));
-  // leaf clusters: flattened balls of spray cards, darker underneath and inside
+  tips.push(top.clone().add(V(0, H - top.y - cR * 0.6, 0)));
+  // the crown as a whole (for the bent normals and the shading inside it)
+  const box = new THREE.Box3().setFromPoints(tips);
+  const crown = { c: box.getCenter(V()), r: box.getSize(V()).multiplyScalar(0.5).addScalar(cR * 0.8) };
+  crown.c.y -= cR * 0.2;
+  // fill the inside of the crown too, so it reads as one deep leafy mass from the side and from the air
+  const nFill = low ? 4 : 7;
+  for (let k = 0; k < nFill; k++) {
+    const u = rnd() * 6.28, rr = Math.sqrt(rnd()) * 0.75;
+    tips.push(crown.c.clone().add(V(Math.cos(u) * rr * crown.r.x, (rnd() * 0.9 - 0.2) * crown.r.y, Math.sin(u) * rr * crown.r.z)));
+  }
+  // leaf clusters: small flattened balls of spray cards on every twig tip; darker underneath and inside
   const cell = pale ? CELLS.kukui : CELLS.canopy;
-  const per = 14;
-  for (const c of crown) {
-    const r = cR * (0.75 + rnd() * 0.5);
+  const per = 7;
+  for (const c of tips) {
+    const r = cR * (0.5 + rnd() * 0.3);
     for (let k = 0; k < per; k++) {
-      const u = rnd() * 6.28, v = Math.acos(1 - 2 * Math.pow(rnd(), 0.7)), rr = r * (0.45 + 0.55 * rnd());
-      const off = V(Math.sin(v) * Math.cos(u) * rr, Math.cos(v) * rr * 0.75, Math.sin(v) * Math.sin(u) * rr);
+      const u = rnd() * 6.28, v = Math.acos(1 - 2 * Math.pow(rnd(), 0.6)), rr = r * (0.35 + 0.65 * rnd());
+      const off = V(Math.sin(v) * Math.cos(u) * rr, Math.cos(v) * rr * 0.8, Math.sin(v) * Math.sin(u) * rr);
       const pos = c.clone().add(off);
-      const n = off.clone().normalize().add(V(0, 0.35, 0)).add(V(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).multiplyScalar(1.1)).normalize();
+      // cards lie mostly flat-ish and face outwards, like leaves turned to the light
+      const n = off.clone().normalize().add(V(0, 0.6, 0)).add(V(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).multiplyScalar(1.0)).normalize();
       const right = n.clone().cross(V(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).normalize()).normalize();
       const up = right.clone().cross(n).normalize();
-      const s = r * (0.75 + rnd() * 0.4);
-      const ao = 0.5 + 0.5 * THREE.MathUtils.clamp((off.y + r * 0.55) / (r * 1.1), 0, 1) * (0.6 + 0.4 * rr / r);
-      const col = tint(rnd, [ao, ao, ao * 0.95], 0.08);
-      leaves.card(pos, right.multiplyScalar(s), up.multiplyScalar(s), cell, col, { centre: c.clone().add(V(0, -r * 0.3, 0)), flut: 0.7, centred: true }, k % 2 === 0);
+      const s = r * (1.0 + rnd() * 0.5);
+      // ambient occlusion: how deep in the crown, and how low
+      const q = pos.clone().sub(crown.c).divide(crown.r);
+      const depthAO = THREE.MathUtils.clamp(q.length(), 0, 1);
+      const ao = (0.38 + 0.62 * Math.pow(depthAO, 1.4)) * (0.72 + 0.28 * THREE.MathUtils.clamp(q.y * 0.5 + 0.6, 0, 1));
+      const col = tint(rnd, [ao, ao, ao * 0.95], 0.1);
+      leaves.card(pos, right.multiplyScalar(s), up.multiplyScalar(s), cell, col, { centre: c.clone().add(V(0, -r * 0.3, 0)), crown, flut: 0.7, centred: true }, k % 2 === 0);
     }
+  }
+  // pothos and climbing vines up the trunk: cards hugging the bark, facing out
+  const climb = low ? 1 : 2 + Math.floor(rnd() * 4);
+  for (let k = 0; k < climb; k++) {
+    const a = rnd() * 6.28, y0 = rnd() * hb * 0.25, len = hb * (0.45 + rnd() * 0.5);
+    const out = V(Math.cos(a), 0, Math.sin(a));
+    const t0 = trunk[Math.min(8, Math.round((y0 + len / 2) / (hb * 1.12) * 8))];
+    const base = V(t0.x, y0, t0.z).addScaledVector(out, R0 * 1.15);
+    leaves.card(base, out.clone().cross(UP).multiplyScalar(1.1), V(0, len, 0), CELLS.vine, tint(rnd, [0.55, 0.62, 0.52], 0.1), { flut: 0.3, n: out.clone().add(V(0, 0.3, 0)).normalize() }, k === 0);
   }
   // lianas hanging from under the crown
   for (let k = 0; k < vines; k++) {
-    const c = crown[Math.floor(rnd() * crown.length)];
+    const c = tips[Math.floor(rnd() * tips.length)];
     const len = 2.5 + rnd() * 3.5, yaw = rnd() * 6.28;
     const base = c.clone().add(V((rnd() - 0.5) * 2, -cR * 0.35 - len, (rnd() - 0.5) * 2));
-    leaves.card(base, V(Math.cos(yaw), 0, Math.sin(yaw)).multiplyScalar(0.9), V(0, len, 0), CELLS.vine, tint(rnd, [0.85, 0.9, 0.85], 0.1), { flut: 1.2, n: V(Math.sin(yaw), 0.4, -Math.cos(yaw)).normalize() });
+    leaves.card(base, V(Math.cos(yaw), 0, Math.sin(yaw)).multiplyScalar(0.9), V(0, len, 0), CELLS.vine, tint(rnd, [0.75, 0.82, 0.75], 0.1), { flut: 1.2, n: V(Math.sin(yaw), 0.4, -Math.cos(yaw)).normalize() });
   }
   return Dual.prototype.out(bark, leaves, { H, trunkR: R0 * 1.3, crownLow: hb });
 }
@@ -317,15 +353,16 @@ export function treeFern(rnd, { trunkH = 3, L = 3, detail = 1 } = {}) {
     bark.tube(pts, (t) => 0.22 + 0.14 * (1 - t) ** 2 + 0.05 * t * t, 7, STRIP.fern, tint(rnd, [1, 1, 1], 0.1), 0.25, true);
     C = pts[4];
   }
-  const F = 11 + Math.floor(rnd() * 5);
-  const segs = 5;
+  const F = 14 + Math.floor(rnd() * 6);
+  const segs = 6;
   for (let f = 0; f < F; f++) {
     const az = f * 2.39996 + rnd() * 0.4;
     const young = f < 2;
-    const el = young ? 1.3 : 0.55 + rnd() * 0.55;
-    const len = L * (young ? 0.55 : 0.8 + rnd() * 0.3);
-    const spine = arch(C.clone().add(dirFrom(az, 0).multiplyScalar(0.1)), az, el, len, young ? 0.2 : 1.1 + rnd() * 0.6, segs);
-    leaves.ribbon(spine, len * 0.24, CELLS.fern, tint(rnd, young ? [1.1, 1.15, 0.9] : [1, 1, 1], 0.1), { fold: 0.18, centre: C.clone().add(V(0, -0.3, 0)), flut: 1 }, f % 3 !== 2);
+    const el = young ? 1.3 : 0.5 + rnd() * 0.6;
+    const len = L * (young ? 0.55 : 0.85 + rnd() * 0.3);
+    const spine = arch(C.clone().add(dirFrom(az, 0).multiplyScalar(0.1)), az, el, len, young ? 0.2 : 1.0 + rnd() * 0.7, segs);
+    leaves.ribbon(spine, len * 0.25, CELLS.fern, tint(rnd, young ? [1.1, 1.15, 0.9] : [1, 1, 1], 0.1),
+      { fold: 0.12, foldTip: 0.5, centre: C.clone().add(V(0, -0.3, 0)), flut: 1, aoBase: 0.6 }, f % 3 !== 2);
   }
   return Dual.prototype.out(bark, leaves, { H, trunkR: 0.25 });
 }
@@ -339,13 +376,13 @@ export function banana(rnd, { H = 4, detail = 1 } = {}) {
     const o = s ? V((rnd() - 0.5) * 1.2, 0, (rnd() - 0.5) * 1.2) : V();
     const top = o.clone().add(V((rnd() - 0.5) * 0.3, h, (rnd() - 0.5) * 0.3));
     bark.tube([o, o.clone().lerp(top, 0.5), top], (t) => 0.15 * (1 - 0.4 * t) * Math.sqrt(h / H) + 0.03, 7, STRIP.banana, tint(rnd, [1, 1, 1], 0.1), 0.25);
-    const nl = (6) + Math.floor(rnd() * 3);
+    const nl = 7 + Math.floor(rnd() * 4);
     for (let k = 0; k < nl; k++) {
       const az = k * 2.39996 + rnd() * 0.5;
       const dry = k === nl - 1 && rnd() < 0.6;
       const L = (dry ? 1.5 : 1.7 + rnd() * 1.0) * Math.sqrt(h / H);
       const spine = arch(top.clone(), az, dry ? -0.6 : 0.95 + rnd() * 0.4, L, dry ? 0.6 : 0.9 + rnd() * 0.8, 5);
-      leaves.ribbon(spine, L * 0.24, CELLS.banana, dry ? [0.8, 0.6, 0.35] : tint(rnd, [1, 1, 1], 0.1), { fold: 0.22, centre: top, flut: 1.1, roll: (rnd() - 0.5) * 0.8 }, k % 2 === 0 || dry);
+      leaves.ribbon(spine, L * 0.29, CELLS.banana, dry ? [0.8, 0.6, 0.35] : tint(rnd, [1, 1, 1], 0.1), { fold: 0.15, foldTip: 0.35, centre: top, flut: 1.1, roll: (rnd() - 0.5) * 0.8, aoBase: 0.7 }, k % 2 === 0 || dry);
     }
   }
   return Dual.prototype.out(bark, leaves, { H: H + 1.5, trunkR: 0.2 });
@@ -415,4 +452,39 @@ export function leafClump(rnd, c, { n = 7, s = 1.1, detail = 1 } = {}) {
     m.card(base, right, blade, c, tint(rnd, [1, 1, 1], 0.1), { centre, flut: 0.8 });
   }
   return { leaves: m.geometry(), H: s * 1.4 };
+}
+
+// a carpet of leaves over the forest floor: cards lying almost flat (tilted up a little), scattered over radius R,
+// normals up so they light like the ground they cover; darker in the middle of the patch
+export function carpet(rnd, cells, { n = 14, R = 1.6, s = 1 } = {}) {
+  const m = new Mesher(0.6 * s);
+  for (let i = 0; i < n; i++) {
+    const a = rnd() * 6.28, r = R * Math.sqrt(rnd());
+    const yaw = rnd() * 6.28, tilt = 0.15 + rnd() * 0.45, size = s * (0.7 + rnd() * 0.6);
+    const fwd = V(Math.cos(yaw) * Math.cos(tilt), Math.sin(tilt), Math.sin(yaw) * Math.cos(tilt)).multiplyScalar(size);
+    const right = V(-Math.sin(yaw), 0, Math.cos(yaw)).multiplyScalar(size * 0.9);
+    const ao = 0.6 + 0.4 * r / R;
+    m.card(V(Math.cos(a) * r, 0.02, Math.sin(a) * r).addScaledVector(fwd, -0.35), right, fwd, cells[i % cells.length], tint(rnd, [ao, ao, ao], 0.12),
+      { n: V(Math.cos(yaw) * 0.15, 1, Math.sin(yaw) * 0.15).normalize(), flut: 0.5 });
+  }
+  return { leaves: m.geometry(), H: 0.6 * s };
+}
+
+// a rounded shrub (naupaka, hau scrub): leaf-spray cards over a low dome, facing out of it, with the normals bent
+// out of the dome and the inside and underside shaded, so it reads as a solid leafy mound instead of crossed planes
+export function shrub(rnd, c, { n = 22, R = 1.2, h = 1.0, s = 0.9 } = {}) {
+  const m = new Mesher(h);
+  const crown = { c: V(0, h * 0.35, 0), r: V(R, h * 0.75, R) };
+  for (let i = 0; i < n; i++) {
+    const u = rnd() * 6.28, v = Math.acos(1 - 1.15 * rnd()), rr = 0.55 + 0.45 * rnd();
+    const d = V(Math.sin(v) * Math.cos(u), Math.cos(v), Math.sin(v) * Math.sin(u));
+    const pos = V(d.x * R * rr, Math.max(0.1 * h, h * 0.35 + d.y * h * 0.65 * rr), d.z * R * rr);
+    const nrm = d.clone().add(V(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).multiplyScalar(0.8)).normalize();
+    const right = nrm.clone().cross(V(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).normalize()).normalize();
+    const up = right.clone().cross(nrm).normalize();
+    const size = s * (0.8 + rnd() * 0.5);
+    const ao = (0.5 + 0.5 * rr) * (0.7 + 0.3 * Math.max(0, d.y));
+    m.card(pos, right.multiplyScalar(size), up.multiplyScalar(size), c, tint(rnd, [ao, ao, ao], 0.1), { centre: crown.c, crown, flut: 0.6, centred: true });
+  }
+  return { leaves: m.geometry(), H: h };
 }

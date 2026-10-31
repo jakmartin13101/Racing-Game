@@ -14,6 +14,7 @@ export const BREAKABLE = {
   old_tyre: { mass: 14 }, wooden_crate_02: { mass: 25 }, wooden_crate_01: { mass: 20 }, propane_tank: { mass: 30 },
   metal_jerrycan: { mass: 8 }, rusted_wheel_rim_02: { mass: 10 }, painted_wooden_bench: { mass: 35 },
   wooden_picnic_table: { mass: 60 }, chevron_sign: { mass: 18 }, chevron_sign_l: { mass: 18 },
+  driftwood_log: { mass: 45 }, driftwood_log_b: { mass: 35 }, fish_crate: { mass: 9 }, fish_crate_b: { mass: 9 }, net_float: { mass: 3 }, marker_post: { mass: 6 }, // Kai'ele coast
   concrete_road_barrier: { mass: 650, solid: true, breakSpeed: 13 },
   street_lamp_01: { mass: 140, solid: true, breakSpeed: 5, tall: true },
 };

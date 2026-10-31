@@ -1,0 +1,10 @@
+Kai'ele plant textures, built by tools/kaiele_plants.py. Sources are CC0 1.0 (public domain):
+
+foliage.webp / foliage_1k.webp: photographed leaves cut out of ambientCG leaf and grass atlases, recoloured
+and composed into fronds, sprays and tufts:
+  LeafSet001 LeafSet004 LeafSet013 LeafSet014 LeafSet018 LeafSet022 LeafSet023 LeafSet024
+  Foliage001 Foliage002 Foliage006 Foliage007 Foliage008          https://ambientcg.com/a/<id>
+bark.jpg / bark_n.jpg: ambientCG Bark007 (rainforest bark, palm trunk base) and Bark001 (roots, branches),
+squeezed into strips; the other strips are procedural.
+
+ambientCG assets are released under CC0: https://creativecommons.org/publicdomain/zero/1.0/

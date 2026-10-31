@@ -2,11 +2,12 @@ import * as THREE from 'three';
 
 const BASE = import.meta.env.BASE_URL;
 
-export async function loadWorld() {
+export async function loadWorld(dir = 'world') {
   const [hb, data] = await Promise.all([
-    fetch(`${BASE}world/height.u16`).then((r) => r.arrayBuffer()),
-    fetch(`${BASE}world/track.json`).then((r) => r.json()),
+    fetch(`${BASE}${dir}/height.u16`).then((r) => r.arrayBuffer()),
+    fetch(`${BASE}${dir}/track.json`).then((r) => r.json()),
   ]);
+  data.region = data.region || 'volcano';
   const raw = new Uint16Array(hb);
   const heights = new Float32Array(raw.length);
   const k = (data.hmax - data.hmin) / 65535;
@@ -14,7 +15,7 @@ export async function loadWorld() {
   const g = data.grid;
   const res = data.extent / (g - 1);
   const half = data.extent / 2;
-  const world = { heights, data, grid: g, res, half, extent: data.extent };
+  const world = { heights, data, grid: g, res, half, extent: data.extent, dir };
   world.heightAt = (x, z) => {
     const fx = (x + half) / res, fz = (z + half) / res;
     let ix = Math.floor(fx), iz = Math.floor(fz);

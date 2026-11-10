@@ -1,0 +1,6 @@
+Wooden Picnic Table (wooden_picnic_table)
+Source: https://polyhaven.com/a/wooden_picnic_table
+Author(s): Ulan Cabanilla
+License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
+Type: model
+Files: wooden_picnic_table_2k.gltf, wooden_picnic_table.bin, textures/wooden_picnic_table_bottom_diff_2k.jpg, textures/wooden_picnic_table_top_arm_2k.jpg, textures/wooden_picnic_table_bottom_nor_gl_2k.jpg, textures/wooden_picnic_table_top_nor_gl_2k.jpg, textures/wooden_picnic_table_bottom_arm_2k.jpg, textures/wooden_picnic_table_top_diff_2k.jpg

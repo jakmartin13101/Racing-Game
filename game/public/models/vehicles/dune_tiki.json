@@ -1,0 +1,55 @@
+{
+ "id": "dune_tiki",
+ "name": "Tiki Runner",
+ "class": "dune",
+ "number": 808,
+ "model": "models/vehicles/dune_tiki.glb",
+ "textures": "models/vehicles/dune_tiki/",
+ "wheels": {
+  "wheel_FL": {
+   "pos": [
+    0.75,
+    -1.03,
+    -0.37
+   ],
+   "radius": 0.33
+  },
+  "wheel_FR": {
+   "pos": [
+    -0.75,
+    -1.03,
+    -0.37
+   ],
+   "radius": 0.33
+  },
+  "wheel_RL": {
+   "pos": [
+    0.78,
+    1.03,
+    -0.33
+   ],
+   "radius": 0.37
+  },
+  "wheel_RR": {
+   "pos": [
+    -0.78,
+    1.03,
+    -0.33
+   ],
+   "radius": 0.37
+  }
+ },
+ "steer": null,
+ "origin_height": 0.7,
+ "length": 3.26,
+ "width": 1.96,
+ "height": 1.72,
+ "tris": 111136,
+ "tune": {
+  "mass": 700,
+  "power": 0.6,
+  "grip": 0.95,
+  "top": 128
+ },
+ "blurb": "Island buggy with a longboard on the roll bar"
+}

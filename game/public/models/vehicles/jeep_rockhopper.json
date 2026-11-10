@@ -1,0 +1,55 @@
+{
+ "id": "jeep_rockhopper",
+ "name": "Rockhopper",
+ "class": "jeep",
+ "number": 72,
+ "model": "models/vehicles/jeep_rockhopper.glb",
+ "textures": "models/vehicles/jeep_rockhopper/",
+ "wheels": {
+  "wheel_FL": {
+   "pos": [
+    0.86,
+    -1.16,
+    -0.678
+   ],
+   "radius": 0.5
+  },
+  "wheel_FR": {
+   "pos": [
+    -0.86,
+    -1.16,
+    -0.678
+   ],
+   "radius": 0.5
+  },
+  "wheel_RL": {
+   "pos": [
+    0.86,
+    1.26,
+    -0.678
+   ],
+   "radius": 0.5
+  },
+  "wheel_RR": {
+   "pos": [
+    -0.86,
+    1.26,
+    -0.678
+   ],
+   "radius": 0.5
+  }
+ },
+ "steer": null,
+ "origin_height": 1.178,
+ "length": 4.34,
+ "width": 2.2,
+ "height": 2.498,
+ "tris": 128994,
+ "tune": {
+  "mass": 1800,
+  "power": 0.72,
+  "grip": 1.15,
+  "top": 112
+ },
+ "blurb": "Lifted rock crawler on 40-inch tyres"
+}

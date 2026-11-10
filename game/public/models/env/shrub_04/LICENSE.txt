@@ -1,0 +1,6 @@
+Shrub 04 (shrub_04)
+Source: https://polyhaven.com/a/shrub_04
+Author(s): Rico Cilliers
+License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
+Type: model
+Files: shrub_04_2k.gltf, textures/shrub_04_arm_2k.jpg, shrub_04.bin, textures/shrub_04_nor_gl_2k.jpg, textures/shrub_04_diff_2k.jpg

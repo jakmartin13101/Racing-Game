@@ -1,0 +1,55 @@
+{
+ "id": "jeep_scout",
+ "name": "Desert Scout",
+ "class": "jeep",
+ "number": 1,
+ "model": "models/vehicles/jeep_scout.glb",
+ "textures": "models/vehicles/jeep_scout/",
+ "wheels": {
+  "wheel_FL": {
+   "pos": [
+    0.8,
+    -1.075,
+    -0.49
+   ],
+   "radius": 0.42
+  },
+  "wheel_FR": {
+   "pos": [
+    -0.8,
+    -1.075,
+    -0.49
+   ],
+   "radius": 0.42
+  },
+  "wheel_RL": {
+   "pos": [
+    0.8,
+    1.175,
+    -0.49
+   ],
+   "radius": 0.42
+  },
+  "wheel_RR": {
+   "pos": [
+    -0.8,
+    1.175,
+    -0.49
+   ],
+   "radius": 0.42
+  }
+ },
+ "steer": null,
+ "origin_height": 0.91,
+ "length": 4.17,
+ "width": 2.02,
+ "height": 2.23,
+ "tris": 119698,
+ "tune": {
+  "mass": 1450,
+  "power": 0.62,
+  "grip": 0.98,
+  "top": 120
+ },
+ "blurb": "Short vintage-style scout with a canvas top"
+}

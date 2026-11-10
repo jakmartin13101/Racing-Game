@@ -1,0 +1,55 @@
+{
+ "id": "sxs_duneblade",
+ "name": "Dune Blade",
+ "class": "sxs",
+ "number": 99,
+ "model": "models/vehicles/sxs_duneblade.glb",
+ "textures": "models/vehicles/sxs_duneblade/",
+ "wheels": {
+  "wheel_FL": {
+   "pos": [
+    0.9,
+    -1.18,
+    -0.345
+   ],
+   "radius": 0.385
+  },
+  "wheel_FR": {
+   "pos": [
+    -0.9,
+    -1.18,
+    -0.345
+   ],
+   "radius": 0.385
+  },
+  "wheel_RL": {
+   "pos": [
+    0.9,
+    1.18,
+    -0.345
+   ],
+   "radius": 0.385
+  },
+  "wheel_RR": {
+   "pos": [
+    -0.9,
+    1.18,
+    -0.345
+   ],
+   "radius": 0.385
+  }
+ },
+ "steer": null,
+ "origin_height": 0.73,
+ "length": 3.91,
+ "width": 2.15,
+ "height": 2.08,
+ "tris": 111775,
+ "tune": {
+  "mass": 780,
+  "power": 0.9,
+  "grip": 0.95,
+  "top": 148
+ },
+ "blurb": "Desert racer on paddles with a spare and whip"
+}

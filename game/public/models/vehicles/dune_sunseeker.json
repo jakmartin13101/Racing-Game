@@ -1,0 +1,55 @@
+{
+ "id": "dune_sunseeker",
+ "name": "Sunseeker",
+ "class": "dune",
+ "number": 19,
+ "model": "models/vehicles/dune_sunseeker.glb",
+ "textures": "models/vehicles/dune_sunseeker/",
+ "wheels": {
+  "wheel_FL": {
+   "pos": [
+    0.75,
+    -1.03,
+    -0.37
+   ],
+   "radius": 0.33
+  },
+  "wheel_FR": {
+   "pos": [
+    -0.75,
+    -1.03,
+    -0.37
+   ],
+   "radius": 0.33
+  },
+  "wheel_RL": {
+   "pos": [
+    0.78,
+    1.03,
+    -0.33
+   ],
+   "radius": 0.37
+  },
+  "wheel_RR": {
+   "pos": [
+    -0.78,
+    1.03,
+    -0.33
+   ],
+   "radius": 0.37
+  }
+ },
+ "steer": null,
+ "origin_height": 0.7,
+ "length": 3.26,
+ "width": 1.96,
+ "height": 1.72,
+ "tris": 116898,
+ "tune": {
+  "mass": 680,
+  "power": 0.62,
+  "grip": 0.95,
+  "top": 130
+ },
+ "blurb": "Classic beach buggy, chrome and a spare on the hood"
+}

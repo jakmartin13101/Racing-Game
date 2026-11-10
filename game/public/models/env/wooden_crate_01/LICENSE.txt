@@ -1,0 +1,6 @@
+Wooden Crate 01 (wooden_crate_01)
+Source: https://polyhaven.com/a/wooden_crate_01
+Author(s): James Ray Cock
+License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
+Type: model
+Files: wooden_crate_01_2k.gltf, wooden_crate_01.bin, textures/wooden_crate_01_arm_2k.jpg, textures/wooden_crate_01_nor_gl_2k.jpg, textures/wooden_crate_01_diff_2k.jpg

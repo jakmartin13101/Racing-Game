@@ -84,7 +84,7 @@ export class Damage {
     this.smokeT = 0;
     this.burning = 0;
     this.events = [];
-    this.wheels = [0, 1, 2, 3].map(() => ({ hurt: 0, bent: 0, lost: false }));
+    this.wheels = vehicle.wheelPts.map(() => ({ hurt: 0, bent: 0, lost: false }));
     this.levels = [];
     // each LOD level: its body mesh, its breakable part meshes, and filler panels for the holes they leave
     for (const lvl of vehicle.parts) {
@@ -155,7 +155,7 @@ export class Damage {
   hitWheel(local, dv) {
     const pts = this.v.wheelPts;
     let best = -1, bd = 1.6;
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < pts.length; i++) {
       const d = Math.hypot(local.x - pts[i][0], local.z - pts[i][2]);
       if (d < bd) { bd = d; best = i; }
     }
@@ -415,7 +415,7 @@ export class Damage {
     if (!fx) return;
     const g = this.v.group;
     // a wheel-less corner grinds sparks off the hub
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < this.wheels.length; i++) {
       if (!this.wheels[i].lost || this.v.speed() < 4 || !this.v.vc.wheelIsInContact(i) || Math.random() > 0.6) continue;
       const cp = this.v.vc.wheelContactPoint(i);
       if (cp) fx.sparks(new THREE.Vector3(cp.x, cp.y + 0.05, cp.z), new THREE.Vector3(0, 0.5, 0), time, 2);

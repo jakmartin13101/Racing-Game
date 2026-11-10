@@ -1,0 +1,55 @@
+{
+ "id": "rail_dustdevil",
+ "name": "Dust Devil",
+ "class": "rail",
+ "number": 27,
+ "model": "models/vehicles/rail_dustdevil.glb",
+ "textures": "models/vehicles/rail_dustdevil/",
+ "wheels": {
+  "wheel_FL": {
+   "pos": [
+    0.86,
+    -1.45,
+    -0.35
+   ],
+   "radius": 0.4
+  },
+  "wheel_FR": {
+   "pos": [
+    -0.86,
+    -1.45,
+    -0.35
+   ],
+   "radius": 0.4
+  },
+  "wheel_RL": {
+   "pos": [
+    0.89,
+    1.45,
+    -0.32
+   ],
+   "radius": 0.43
+  },
+  "wheel_RR": {
+   "pos": [
+    -0.89,
+    1.45,
+    -0.32
+   ],
+   "radius": 0.43
+  }
+ },
+ "steer": null,
+ "origin_height": 0.75,
+ "length": 4.25,
+ "width": 2.11,
+ "height": 1.75,
+ "tris": 116723,
+ "tune": {
+  "mass": 950,
+  "power": 0.85,
+  "grip": 1.05,
+  "top": 148
+ },
+ "blurb": "Desert prerunner rail on knobbies, built for rocks"
+}

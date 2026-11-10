@@ -1,0 +1,55 @@
+{
+ "id": "sxs_fourplay",
+ "name": "Four Play",
+ "class": "sxs",
+ "number": 48,
+ "model": "models/vehicles/sxs_fourplay.glb",
+ "textures": "models/vehicles/sxs_fourplay/",
+ "wheels": {
+  "wheel_FL": {
+   "pos": [
+    0.82,
+    -1.55,
+    -0.345
+   ],
+   "radius": 0.385
+  },
+  "wheel_FR": {
+   "pos": [
+    -0.82,
+    -1.55,
+    -0.345
+   ],
+   "radius": 0.385
+  },
+  "wheel_RL": {
+   "pos": [
+    0.82,
+    1.55,
+    -0.345
+   ],
+   "radius": 0.385
+  },
+  "wheel_RR": {
+   "pos": [
+    -0.82,
+    1.55,
+    -0.345
+   ],
+   "radius": 0.385
+  }
+ },
+ "steer": null,
+ "origin_height": 0.73,
+ "length": 4.65,
+ "width": 1.99,
+ "height": 2.08,
+ "tris": 113600,
+ "tune": {
+  "mass": 950,
+  "power": 0.88,
+  "grip": 1.0,
+  "top": 135
+ },
+ "blurb": "Four-seat long-travel family rig"
+}

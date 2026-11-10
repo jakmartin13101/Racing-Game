@@ -1,0 +1,55 @@
+{
+ "id": "sxs_workhorse",
+ "name": "Workhorse",
+ "class": "sxs",
+ "number": 62,
+ "model": "models/vehicles/sxs_workhorse.glb",
+ "textures": "models/vehicles/sxs_workhorse/",
+ "wheels": {
+  "wheel_FL": {
+   "pos": [
+    0.75,
+    -1.18,
+    -0.358
+   ],
+   "radius": 0.36
+  },
+  "wheel_FR": {
+   "pos": [
+    -0.75,
+    -1.18,
+    -0.358
+   ],
+   "radius": 0.36
+  },
+  "wheel_RL": {
+   "pos": [
+    0.75,
+    1.18,
+    -0.358
+   ],
+   "radius": 0.36
+  },
+  "wheel_RR": {
+   "pos": [
+    -0.75,
+    1.18,
+    -0.358
+   ],
+   "radius": 0.36
+  }
+ },
+ "steer": null,
+ "origin_height": 0.718,
+ "length": 3.91,
+ "width": 1.85,
+ "height": 2.067,
+ "tris": 118448,
+ "tune": {
+  "mass": 820,
+  "power": 0.65,
+  "grip": 1.0,
+  "top": 110
+ },
+ "blurb": "Utility UTV with a tipping cargo bed"
+}

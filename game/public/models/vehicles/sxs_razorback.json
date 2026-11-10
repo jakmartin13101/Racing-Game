@@ -1,0 +1,55 @@
+{
+ "id": "sxs_razorback",
+ "name": "Razorback",
+ "class": "sxs",
+ "number": 17,
+ "model": "models/vehicles/sxs_razorback.glb",
+ "textures": "models/vehicles/sxs_razorback/",
+ "wheels": {
+  "wheel_FL": {
+   "pos": [
+    0.89,
+    -1.18,
+    -0.338
+   ],
+   "radius": 0.4
+  },
+  "wheel_FR": {
+   "pos": [
+    -0.89,
+    -1.18,
+    -0.338
+   ],
+   "radius": 0.4
+  },
+  "wheel_RL": {
+   "pos": [
+    0.89,
+    1.18,
+    -0.338
+   ],
+   "radius": 0.4
+  },
+  "wheel_RR": {
+   "pos": [
+    -0.89,
+    1.18,
+    -0.338
+   ],
+   "radius": 0.4
+  }
+ },
+ "steer": null,
+ "origin_height": 0.738,
+ "length": 3.91,
+ "width": 2.13,
+ "height": 2.087,
+ "tris": 128336,
+ "tune": {
+  "mass": 760,
+  "power": 0.85,
+  "grip": 1.02,
+  "top": 140
+ },
+ "blurb": "Two-seat turbo sport UTV"
+}

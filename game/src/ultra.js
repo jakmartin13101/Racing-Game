@@ -34,7 +34,8 @@ export function patchHeightFog(sun, { base = 180, falloff = 0.006, amount = 0.6 
     // the far horizon still fades out whatever its height
     fogFactor = max(fogFactor, 1.0 - exp(-fogDensity * fogDensity * fogDist * fogDist * 0.5));
     float fogSun = pow(max(dot(fogRay / max(fogDist, 1e-3), vec3(${f(sun.x)}, ${f(sun.y)}, ${f(sun.z)})), 0.0), 6.0);
-    vec3 fogCol = fogColor + vec3(0.45, 0.3, 0.12) * fogSun;
+    // (dimmed with the fog itself, so night and storm haze don't glow)
+    vec3 fogCol = fogColor + vec3(0.45, 0.3, 0.12) * fogSun * clamp(dot(fogColor, vec3(0.6)) - 0.15, 0.0, 1.0);
   #else
     float fogFactor = smoothstep( fogNear, fogFar, vFogDepth );
     vec3 fogCol = fogColor;

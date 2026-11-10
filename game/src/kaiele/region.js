@@ -49,7 +49,7 @@ export async function buildKaiele(ctx) {
     if (mod.TrackEvents) events[id] = mod.TrackEvents;
   }
   return {
-    props, colliders, events,
+    props, colliders, events, sky: ctx.sky,
     ambient: { update() {} },
     ownBridges: new Set(['wailele']),
     wetness: (p, track, i) => ocean.wetness(p, track, i),

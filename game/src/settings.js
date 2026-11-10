@@ -33,6 +33,7 @@ function defaults() {
     showFps: false,
     driver: 'YOU',
     paint: 0,
+    lensDrops: true, // rain on the camera lens
   };
 }
 

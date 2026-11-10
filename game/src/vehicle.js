@@ -392,9 +392,11 @@ export class Vehicle {
       const eb = dead ? 7 : 3 + 5 * (this.rpm / T.redline) * (T.gears[this.gear - 1] / 1.5);
       for (let i = 0; i < this.nWheels; i++) if (!lost.has(i)) vc.setWheelBrake(i, eb + loose * 4);
     }
-    // grip: full on the track, less on loose ash and gravel, almost none on a bare hub
+    // grip: full on the track, less on loose ash and gravel, almost none on a bare hub; rain, puddles and snow
+    // take some away (weatherGrip, set by the weather each step)
     // (a region may scale grip and add drag for the surface under the truck: sand, mud, wet reef; see src/kaiele/surfaces.js)
-    for (let i = 0; i < this.nWheels; i++) if (!lost.has(i)) vc.setWheelFrictionSlip(i, T.friction * (1 - (1 - T.looseGrip) * loose) * (this.surfGrip ?? 1));
+    const wg = this.weatherGrip ?? 1;
+    for (let i = 0; i < this.nWheels; i++) if (!lost.has(i)) vc.setWheelFrictionSlip(i, T.friction * wg * (1 - (1 - T.looseGrip) * loose) * (this.surfGrip ?? 1));
     vc.updateVehicle(dt, undefined, RAY_GROUND);
     this.suspensionExtras(dt);
     // air drag, opposite the motion and growing with the square of the speed

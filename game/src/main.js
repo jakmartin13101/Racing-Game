@@ -45,6 +45,17 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 setAniso(Math.min(renderer.capabilities.getMaxAnisotropy(), quality.terrainStep > 3 ? 4 : 16));
+// which graphics card the picture is drawn on (shown in Settings; "ANGLE (NVIDIA, NVIDIA GeForce RTX … Direct3D11 …)")
+const gpu = (() => {
+  try {
+    const gl = renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info');
+    const raw = String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || '');
+    const m = raw.match(/^ANGLE \([^,]*, (.*), [^,]*\)$/);
+    const name = (m ? m[1] : raw).replace(/^ANGLE Metal Renderer: /, '').replace(/ \(0x[0-9a-f]+\)/i, '').replace(/ (Direct3D|OpenGL|Vulkan)\b.*$/i, '').replace(/\s+/g, ' ').trim();
+    const software = /swiftshader|llvmpipe|basic render|software/i.test(raw);
+    return { name: software ? 'software renderer' : name, software };
+  } catch { return { name: '', software: false }; }
+})();
 const ULTRA = !!quality.ultra;
 
 const scene = new THREE.Scene();
@@ -166,8 +177,15 @@ function nearestLava(pos) {
 // ---------------------------------------------------------------- post-processing
 const composer = new EffectComposer(renderer, { frameBufferType: THREE.HalfFloatType });
 composer.addPass(new RenderPass(scene, camera));
+let ao = null;
 if (quality.ao) {
-  const ao = new N8AOPostPass(scene, camera, innerWidth, innerHeight);
+  ao = new N8AOPostPass(scene, camera, innerWidth, innerHeight);
+  // The pass ends by copying its picture into the composer's buffer, and it leaves the depth test on for that
+  // copy. The buffer has the scene's depth attached, and on some drivers (NVIDIA through Direct3D, for one) every
+  // pixel of the copy then fails the test: nothing is written, and bloom and everything after it get black, so
+  // High and Ultra showed a black screen. A full-screen copy needs no depth test.
+  for (const q of [ao.copyQuad, ao.accumulationQuad]) if (q?.material) { q.material.depthTest = false; q.material.depthWrite = false; }
+  if (params.has('breakao')) ao.copyQuad.material.colorWrite = false; // (test: fakes that failure, to check the start-up fallback)
   ao.configuration.aoRadius = 2.5;
   ao.configuration.distanceFalloff = 1.2;
   ao.configuration.intensity = 2.2;
@@ -186,9 +204,11 @@ grain.blendMode.opacity.value = 0.06;
 // Ultra adds sun shafts through the ash and depth of field to the bloom pass
 const shafts = ULTRA && !params.has('noshafts') ? new SunShafts(camera, sun) : null;
 const focusFx = ULTRA && !params.has('nodof') ? new Focus(camera) : null;
-composer.addPass(new EffectPass(camera, ...(focusFx ? [focusFx.effect] : []), bloom, ...(shafts ? [shafts.effect] : [])));
+const bloomPass = new EffectPass(camera, ...(focusFx ? [focusFx.effect] : []), bloom, ...(shafts ? [shafts.effect] : []));
+composer.addPass(bloomPass);
 const mblur = new MotionBlurEffect(quality.blurSamples);
-composer.addPass(new EffectPass(camera, mblur));
+const blurPass = new EffectPass(camera, mblur);
+composer.addPass(blurPass);
 // rain on the lens (its own pass: it bends the picture), skipped entirely in the dry
 const lensPass = weather.lens ? new EffectPass(camera, weather.lens) : null;
 if (lensPass) { lensPass.enabled = false; composer.addPass(lensPass); }
@@ -224,12 +244,13 @@ const hud = {
 let mapBase = null, mapFn = null;
 
 const ui = new UI({
-  tracks: menuTracks, settings: S, save: saveSettings,
+  tracks: menuTracks, settings: S, save: saveSettings, gpu,
   handlers: {
     start: startRace,
     resume: () => setPaused(false),
     restart: () => raceCfg && startRace(raceCfg),
     quitRace: () => toMenu(),
+    onMenu: (on) => { if (on) leaveRace(); },
     quit: () => window.close(),
     onCamera: (v) => rig.setMode(v),
     onTouch: () => { refreshTouch(); if (S.touchSteer === 'tilt') input.enableTilt(); },
@@ -258,13 +279,18 @@ function setPaused(p) {
   touchEl.hidden = p || !S.touchUi;
 }
 
-function toMenu() {
+// back in the main menus (which show stills, not the world): the race is cleared away
+function leaveRace() {
   race?.dispose();
   race = null;
   weather.setVehicles(null);
   state = 'menu';
   hud.root.hidden = true;
   touchEl.hidden = true;
+}
+
+function toMenu() {
+  leaveRace();
   ui.show(ui.champ && ui.champ.round > 0 ? 'world' : 'title', false);
 }
 
@@ -434,6 +460,7 @@ function raceEvents() {
 }
 const tmp = new THREE.Vector3();
 const focus = new THREE.Vector3();
+let camSt = null;
 const menuCentre = ISLAND ? new THREE.Vector3(-300, 0, 600) : new THREE.Vector3(-150, 0, 120);
 
 function simulate(dt) {
@@ -506,7 +533,9 @@ function frame(real) {
   simulate(dt);
   if (race && (state === 'race' || state === 'paused' || state === 'results')) {
     race.sync(dt, t, dust, camera.position);
-    if (state !== 'paused') rig.update(real, race.player.v, race.track, race.player.i, race.player.v.boosting);
+    // (window.__follow: a test hook, the camera follows that truck instead of the player's, for tools/menu-shots.mjs)
+    camSt = race.cars[window.__follow] || race.player;
+    if (state !== 'paused') rig.update(real, camSt.v, race.track, camSt.i, camSt.v.boosting);
     const pv = race.player.v, spd = pv.speed();
     const inCar = rig.cine || rig.leapL ? 0 : 1;
     // camera motion blur grows with speed; boost adds a radial streak, redline adds colour fringing
@@ -514,7 +543,7 @@ function frame(real) {
     mblur.uniforms.get('uRadial').value = inCar * (fast * 0.012 + (pv.boosting ? 0.03 : 0));
     mblur.uniforms.get('uAber').value = inCar * ((pv.boosting ? 0.6 : 0) + (pv.redline ? 1.4 : 0));
     blurAmt = rig.cine || rig.leapL ? 0.25 : 0.55 + fast * 0.35;
-    focus.copy(race.player.v.group.position);
+    focus.copy(camSt.v.group.position);
     updateHud(real);
   } else {
     menuT += dt;
@@ -562,13 +591,49 @@ function frame(real) {
   mblur.uniforms.get('uHaze').value = ULTRA ? Math.min(1.2, lp.strength * 1.6 + (race?.hazards?.lava?.front?.value > 0 ? 0.3 : 0)) : 0;
   mblur.uniforms.get('uTime').value = t;
   if (shafts) shafts.update(camera);
-  if (focusFx) focusFx.update(race && state !== 'menu' ? race.player.v.group.position : focus, !!rig.cine, race ? rig.mode : 'menu');
+  if (focusFx) focusFx.update(focus, !!rig.cine, race ? rig.mode : 'menu');
   mblur.track(camera, blurAmt);
   composer.render(dt);
   if (S.showFps) { fpsAvg += (1 / Math.max(real, 1e-3) - fpsAvg) * 0.05; hud.fps.textContent = `${Math.round(fpsAvg)} FPS`; }
   else hud.fps.textContent = '';
 }
 
+// Is the picture just drawn black all over? (A handful of small patches read back from the screen.)
+function drewBlack() {
+  const gl = renderer.getContext(), w = gl.drawingBufferWidth, h = gl.drawingBufferHeight, px = new Uint8Array(8 * 8 * 4);
+  for (const [u, v] of [[0.5, 0.5], [0.2, 0.3], [0.8, 0.3], [0.2, 0.75], [0.8, 0.75], [0.5, 0.85], [0.5, 0.15]]) {
+    gl.readPixels(Math.floor(w * u), Math.floor(h * v), 8, 8, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    for (let i = 0; i < px.length; i += 4) if (px[i] + px[i + 1] + px[i + 2] > 6) return false;
+  }
+  return true;
+}
+
+// The menus show stills, not the world, so nothing would build the world's shaders until the first race started.
+// Draw it once here, behind the loading screen, so that first race starts without a stall. It doubles as a check:
+// this view (the volcano under a daytime sky) is never black, so if it comes out black an effect is failing on
+// this graphics driver. Switch the optional ones off one at a time until there is a picture, and say so in Settings.
+const toMenus = !params.has('race') && !pending;
+if (toMenus && !params.has('still')) {
+  loadStep(0.96, 'WARMING UP…');
+  await new Promise((r) => setTimeout(r, 30));
+  try {
+    frame(1 / 60);
+    if (drewBlack()) {
+      const off = [];
+      for (const [pass, label] of [[ao, 'ambient shadows'], [blurPass, 'motion blur'], [bloomPass, 'bloom and depth of field']]) {
+        if (!pass) continue;
+        pass.enabled = false;
+        off.push(label);
+        composer.render(1 / 60);
+        if (!drewBlack()) break;
+      }
+      const fixed = !drewBlack();
+      console.warn(`graphics: the picture came out black on ${gpu.name}; ${fixed ? `fixed by switching off ${off.join(', ')}` : 'switching the effects off did not help'}`);
+      if (fixed) ui.gpuNote(`${off.join(', ')} switched off (they draw black on this driver)`);
+      else for (const pass of [ao, blurPass, bloomPass]) if (pass) pass.enabled = true;
+    }
+  } catch (e) { console.warn('warm-up frame', e); }
+}
 loadStep(1, 'READY');
 $('loading').remove();
 
@@ -615,6 +680,7 @@ if (still) {
       burned: (race.hazards.erupt.flow.log || []).join(' '), erupting: !!race.hazards.erupt.erupting },
     knocked: breakables.items.filter((i) => i.state !== 'static').length, props: breakables.items.length, debris: debris.list.length };
   window.__race = race; window.__fx = crashFx; window.__skids = skids; window.__weather = weather; window.__frame = frame;
+  window.__step = frameNoRender; window.__rig = rig; // (tools/menu-shots.mjs steps on and moves the camera)
   window.__ready = true;
 } else {
   window.__ready = true;
@@ -627,7 +693,7 @@ function frameNoRender(real) {
   const dt = SLOW ? real * timeScale : real;
   t += dt;
   simulate(dt);
-  if (race) { race.sync(dt, t, null, camera.position); rig.update(dt, race.player.v, race.track, race.player.i, false); }
+  if (race) { race.sync(dt, t, null, camera.position); const c = race.cars[window.__follow] || race.player; rig.update(dt, c.v, race.track, c.i, false); }
   if (LOOK) camera.position.set(LOOK[0], LOOK[1], LOOK[2]);
   crashFx.update(t, dt);
   crashFx.booms.length = 0;
@@ -638,6 +704,8 @@ function frameNoRender(real) {
 // frame cap: browser and phone builds default to 30 fps, the desktop app runs uncapped
 function loop(now) {
   requestAnimationFrame(loop);
+  // the menus show stills, not the world, so the graphics card idles until a race starts
+  if (state === 'menu') { clock.getDelta(); return; }
   const cap = S.fps || 0;
   if (cap && now - lastFrame < 1000 / cap - 2) return;
   const dt = Math.min(clock.getDelta(), 1 / 15);

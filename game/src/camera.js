@@ -59,7 +59,7 @@ export class CameraRig {
       cam.position.copy(pos);
       this.look.copy(p).addScaledVector(fwd.set(Math.sin(yaw), 0, Math.cos(yaw)), 1.5).add(up.set(0, this.cineLook ?? 1.2, 0));
       cam.lookAt(this.look);
-      cam.fov = 48; cam.updateProjectionMatrix();
+      cam.fov = this.cineFov || 48; cam.updateProjectionMatrix();
       return;
     }
     if (this.leapL) { this.leapCam(dt, p); return; }

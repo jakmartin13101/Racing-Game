@@ -201,8 +201,8 @@ export class Damage {
     if (this.totaled && !this.totaledAt) {
       this.totaledAt = true;
       this.events.push({ type: 'totaled' });
-      // a wreck catches fire in the engine bay, and a moment later the fuel tank goes up
-      if (!this.blown) { this.burning = Math.max(this.burning, 0.55); this.boomT = this.boomAfter ?? 1.3 + Math.random() * 1.7; }
+      // a wreck catches fire in the engine bay; a moment later the fuel tank goes up (see update)
+      if (!this.blown) this.burning = Math.max(this.burning, 0.55);
     }
   }
 
@@ -478,7 +478,8 @@ export class Damage {
     this.blown = true;
     this.level = 1;
     this.totaledAt = true;
-    this.boomT = 0;
+    // the fire reaches the fuel tank while the slow-motion shot is still running
+    this.boomT = this.boomAfter ?? 1.0 + Math.random() * 0.5;
     const g = this.v.group;
     g.updateMatrixWorld(true);
     const bay = this.hoodBox.getCenter(new THREE.Vector3()).applyMatrix4(g.matrixWorld);
@@ -577,10 +578,15 @@ export class Damage {
     }
     this.engineTick(dt, time);
     this.lampTick(dt, time);
+    // every wreck goes up: however the truck was totaled (a smash, a blown engine, the lava), the fire reaches
+    // its fuel tank a moment later
+    if (this.totaled && !this.exploded) {
+      this.boomT ??= this.boomAfter ?? 0.9 + Math.random() * 1.1;
+      this.boomT -= dt;
+      if (this.boomT <= 0) this.explodeWreck();
+    }
     const fx = this.fx;
     if (!fx) return;
-    // the fuel tank of a burning wreck goes up
-    if (this.boomT > 0) { this.boomT -= dt; if (this.boomT <= 0) this.explodeWreck(); }
     // a wheel-less corner grinds sparks off the hub
     for (let i = 0; i < this.wheels.length; i++) {
       if (!this.wheels[i].lost || this.v.speed() < 4 || !this.v.vc.wheelIsInContact(i) || Math.random() > 0.6) continue;

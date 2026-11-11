@@ -20,7 +20,16 @@ npm run dist:win   # Windows installer -> release/GravelRiot-Setup.exe (needs ma
   the finale) with 10-8-6-5-4-3-2-1 points and standings after each round.
 - **Quick Race**: any track, 0 to 7 opponents, easy / normal / hard AI, lap count, truck paint.
 - **Settings**: graphics preset (low / medium / high / ultra), frame-rate cap (30 / 60 / uncapped), camera, touch
-  steering style (buttons or tilt), auto-accelerate, steering assist, FPS counter, driver name.
+  steering style (buttons or tilt), auto-accelerate, steering assist, FPS counter, driver name. The bottom line
+  names the graphics card the game is drawing on.
+
+**Menus**: behind the main menus are cinematic stills of the game (every track, smashes, a storm, the lava field
+at night) that fade slowly into one another, each drifting like a camera on a slow push or pan. The 3D world is
+not drawn while they show, so the graphics card idles until a race starts. In Quick Race the picked track's own
+still is behind the menu, its card runs a small lap of the pack round the outline, and beside the cards (on a
+wide screen) the track turns slowly in 3D with its climbs and drops drawn out, the pack running round it, and its
+length and climb underneath. The stills are rendered from the game itself by `node tools/menu-shots.mjs` (with
+`npm run dev` running) into `public/menu/`; add `GPU=1` to render them on a real graphics card.
 
 Tracks share one volcano map:
 
@@ -107,9 +116,10 @@ Cameras: chase, far chase, hood, bumper and trackside TV.
   boulders do damage too. Damage costs power and top speed; at 100% the truck is totaled, coasts to a stop and is
   out (DNF), unless it rolls over the finish line first. A big smash on the player's truck plays for a moment in
   slow motion.
-- **Wrecks explode**: a totaled truck catches fire in the engine bay, and a second or two later its fuel tank goes
-  up. The fireball throws the truck up and over, bulges the body, blows out the glass and most of what is still
-  bolted on, and leaves the wreck burning along its whole length.
+- **Wrecks explode**, every time: however a truck is totaled (smashed up, the engine blown, caught by the lava) it
+  burns for a second or two and then its fuel tank goes up. The fireball throws the truck up and over, bulges the
+  body, blows out the glass and most of what is still bolted on, and leaves the wreck burning along its whole
+  length. A blown engine's second explosion lands inside its slow-motion shot.
 - **Explosions**: boiling fireballs that roll upwards and cool from white-hot through orange into a black smoke ball,
   a shock ring along the ground and a heat shell, flame tongues, shrapnel sparks and long-burning embers, a dust
   ring, a smoke column, a scorch mark left on the ground, a flickering flash of light and a camera shake that
@@ -125,7 +135,7 @@ Cameras: chase, far chase, hood, bumper and trackside TV.
 `tools/truck/split.py` cuts the breakable parts out of the baked truck models.
 
 URL options: `?race=caldera|village|summit|eruption`, `&weather=clear|cloudy|lightrain|rain|heavyrain|storm|fog|snow|blizzard`, `&time=morning|day|evening|night` (`&anywx` ignores the track's climate), `&ai=N`, `&laps=N`, `&diff=easy|normal|hard`, `&cam=...`,
-`?q=low|medium|high|ultra`, `?sub=N` (physics substeps), `?nofog`, `?noshafts`, `?nodof`, `?noskid`, `?fps=N`, `?auto` (autopilot), `?blow` (force an engine blow), `?lose=0..3` (tear that tyre off the player's truck), `?at=N&yaw=R&ram=V` (crash test), `?dent=front:22,left:14,top:9` (hit the player's truck that hard on those sides, from 1 s in), `?boomt=S` (a wreck's tank goes up S seconds after it is totaled), `?cine=A&cined=D&cineh=H&cinel=L` (the wreck camera at a fixed angle, distance and height, for damage shots), `?lava=N` (Eruption: start the lava N m behind the truck placed with `at`), `?trace` (log truck progress), `?look=x,y,z,tx,ty,tz` (a fixed camera, for scenery shots), `?still=N` (render one frame after N simulated steps,
+`?q=low|medium|high|ultra`, `?sub=N` (physics substeps), `?nofog`, `?noshafts`, `?nodof`, `?noskid`, `?fps=N`, `?auto` (autopilot), `?blow` (force an engine blow), `?lose=0..3` (tear that tyre off the player's truck), `?at=N&yaw=R&ram=V` (crash test), `?dent=front:22,left:14,top:9` (hit the player's truck that hard on those sides, from 1 s in), `?boomt=S` (a wreck's tank goes up S seconds after it is totaled), `?cine=A&cined=D&cineh=H&cinel=L` (the wreck camera at a fixed angle, distance and height, for damage shots), `?lava=N` (Eruption: start the lava N m behind the truck placed with `at`), `?screen=quick|world|settings` (open on that menu), `?breakao` (fake a black picture from the ambient occlusion pass, to check the start-up fallback), `?trace` (log truck progress), `?look=x,y,z,tx,ty,tz` (a fixed camera, for scenery shots), `?still=N` (render one frame after N simulated steps,
 used for headless captures).
 
 ## Code
@@ -139,8 +149,16 @@ respawns, results), `camera.js` (the TV camera checks its line of sight and move
 `hazards.js` (bombs, boulders, the Caldera lava breakout), `eruption.js` (Eruption's heaves, fissures, crater leap, lava fountains, lava flow and road rocks), `ultra.js` (height fog, sun shafts, depth of field, tyre marks), `weather/` (sky, time of day, rain, snow, lightning, wet surfaces, truck lights), `damage.js` (zones, parts, glass, lamps, fire), `softbody.js` (the crumple lattice and its shader patch),
 `engine.js` (the procedural engine bay), `explosion.js` (fireballs, shock rings, scorch marks), `crash.js`, `fx.js` (smoke, fire,
 motion blur), `input.js` (keyboard, gamepad, touch, tilt), `ui.js` / `ui.css` (menus,
-HUD), `settings.js` (presets and saved settings), `props.js` and `village.js` (scenery). The desktop
+HUD), `menu.js` (the stills behind the menus and the animated track map), `settings.js` (presets and saved settings), `props.js` and `village.js` (scenery). The desktop
 wrapper is `electron/main.cjs`, and `electron/installer.nsi` builds the installer.
+
+**If the picture is black.** High and Ultra add ambient occlusion (n8ao). Its last step copies the result into the
+post-processing buffer with the depth test left on, and on some drivers (NVIDIA through Direct3D, which is what the
+Windows app uses) every pixel of that copy fails the test, so the whole frame came out black with no error anywhere.
+`main.js` turns the depth test off on that copy. As a safety net the start-up frame drawn behind the loading screen
+is read back: if it is black, the optional effects are switched off one at a time until there is a picture, and
+Settings says which. The desktop app also writes `%APPDATA%\Gravel Riot\gravel-riot.log` each run: the graphics
+cards found, warnings and errors from the game, and any graphics process that died.
 
 ## Truck and environment
 

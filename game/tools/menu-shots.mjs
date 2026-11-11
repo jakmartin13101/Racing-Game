@@ -36,7 +36,7 @@ export const SHOTS = {
   smash: { q: 'race=village&ai=0&at=100&yaw=1.5&ram=30&weather=clear&time=day', step: 151, cam: { a: 1.47, d: 7, h: 2.2, l: 0.5 } },
   fireball: { q: 'race=caldera&ai=0&at=60&dent=front:30,left:26,rear:26&boomt=1.2&weather=clear&time=day', step: 146, cam: { a: 3.25, d: 14, h: 2.5, l: 1.5 } },
   storm: { q: 'race=village&ai=7&auto&weather=storm&time=evening', step: 520, car: 0, cam: { a: 0.5, d: 7, h: 1, l: 1 } },
-  night: { q: 'race=kulapele&ai=7&auto&weather=clear&time=night', step: 520, car: 0, cam: { a: 0.5, d: 7, h: 1, l: 1 } },
+  night: { q: 'race=kulapele&ai=7&auto&weather=clear&time=night', step: 520, car: 0, cam: { a: -0.75, d: 10, h: 1.5, l: 1.1, fov: 46 } },
 };
 
 const only = process.argv.slice(2);

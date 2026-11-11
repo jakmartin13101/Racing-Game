@@ -52,7 +52,17 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: game/package-lock.json
-      - run: sudo apt-get update && sudo apt-get install -y nsis
+      # NSIS compiles the installer. Now and then the runner's own DNS cannot find Ubuntu's package servers, and
+      # the install then fails before anything is built; if so, ask public DNS servers instead and try again.
+      - name: Install NSIS
+        run: |
+          public_dns() {
+            echo "The runner's DNS cannot reach Ubuntu's package servers: using public DNS servers"
+            printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' | sudo tee /etc/resolv.conf
+          }
+          install_nsis() { sudo apt-get update && sudo apt-get install -y nsis; }
+          getent hosts azure.archive.ubuntu.com archive.ubuntu.com security.ubuntu.com > /dev/null || public_dns
+          install_nsis || { public_dns; install_nsis; }
       - run: npm ci
       - run: npm run build
       - run: npx electron-builder --win dir --x64 --publish never

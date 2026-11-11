@@ -1,0 +1,6 @@
+Rock 09 (rock_09)
+Source: https://polyhaven.com/a/rock_09
+Author(s): Jenelle van Heerden
+License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
+Type: model
+Files: rock_09_2k.gltf, textures/rock_09_nor_gl_2k.jpg, textures/rock_09_diff_2k.jpg, rock_09.bin, textures/rock_09_arm_2k.jpg

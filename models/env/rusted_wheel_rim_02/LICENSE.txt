@@ -1,0 +1,6 @@
+Rusted Wheel Rim 02 (rusted_wheel_rim_02)
+Source: https://polyhaven.com/a/rusted_wheel_rim_02
+Author(s): John Hutcheson
+License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
+Type: model
+Files: rusted_wheel_rim_02_2k.gltf, textures/rusted_wheel_rim_02_diff_2k.jpg, rusted_wheel_rim_02.bin, textures/rusted_wheel_rim_02_nor_gl_2k.jpg, textures/rusted_wheel_rim_02_arm_2k.jpg

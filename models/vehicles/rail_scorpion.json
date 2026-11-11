@@ -1,0 +1,55 @@
+{
+ "id": "rail_scorpion",
+ "name": "Scorpion",
+ "class": "rail",
+ "number": 44,
+ "model": "models/vehicles/rail_scorpion.glb",
+ "textures": "models/vehicles/rail_scorpion/",
+ "wheels": {
+  "wheel_FL": {
+   "pos": [
+    0.86,
+    -1.65,
+    -0.39
+   ],
+   "radius": 0.36
+  },
+  "wheel_FR": {
+   "pos": [
+    -0.86,
+    -1.65,
+    -0.39
+   ],
+   "radius": 0.36
+  },
+  "wheel_RL": {
+   "pos": [
+    0.89,
+    1.65,
+    -0.33
+   ],
+   "radius": 0.42
+  },
+  "wheel_RR": {
+   "pos": [
+    -0.89,
+    1.65,
+    -0.33
+   ],
+   "radius": 0.42
+  }
+ },
+ "steer": null,
+ "origin_height": 0.75,
+ "length": 4.65,
+ "width": 2.14,
+ "height": 1.75,
+ "tris": 116723,
+ "tune": {
+  "mass": 1050,
+  "power": 0.85,
+  "grip": 0.95,
+  "top": 140
+ },
+ "blurb": "Four-seat family rail with a spare paddle"
+}

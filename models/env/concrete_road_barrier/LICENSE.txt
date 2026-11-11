@@ -1,0 +1,6 @@
+Concrete Road Barrier (concrete_road_barrier)
+Source: https://polyhaven.com/a/concrete_road_barrier
+Author(s): Amal Kumar
+License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
+Type: model
+Files: concrete_road_barrier_2k.gltf, textures/concrete_road_barrier_arm_2k.jpg, textures/concrete_road_barrier_diff_2k.jpg, textures/concrete_road_barrier_nor_gl_2k.jpg, concrete_road_barrier.bin

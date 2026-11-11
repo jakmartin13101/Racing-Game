@@ -1,0 +1,6 @@
+Namaqualand Boulder 02 (namaqualand_boulder_02)
+Source: https://polyhaven.com/a/namaqualand_boulder_02
+Author(s): Greg Zaal, Rico Cilliers
+License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
+Type: model
+Files: namaqualand_boulder_02_2k.gltf, namaqualand_boulder_02.bin, textures/namaqualand_boulder_02_diff_2k.jpg, textures/namaqualand_boulder_02_arm_2k.jpg, textures/namaqualand_boulder_02_nor_gl_2k.jpg

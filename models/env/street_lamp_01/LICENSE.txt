@@ -1,0 +1,6 @@
+Street Lamp 01 (street_lamp_01)
+Source: https://polyhaven.com/a/street_lamp_01
+Author(s): Josh Dean
+License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
+Type: model
+Files: street_lamp_01_2k.gltf, textures/street_lamp_01_nor_gl_2k.jpg, textures/street_lamp_01_diff_2k.jpg, textures/street_lamp_01_arm_2k.jpg, street_lamp_01.bin

@@ -1,0 +1,6 @@
+Wooden Crate 02 (wooden_crate_02)
+Source: https://polyhaven.com/a/wooden_crate_02
+Author(s): James Ray Cock, Jurita Burger
+License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
+Type: model
+Files: wooden_crate_02_2k.gltf, textures/wooden_crate_02_nor_gl_2k.jpg, textures/wooden_crate_02_arm_2k.jpg, textures/wooden_crate_02_diff_2k.jpg, wooden_crate_02.bin

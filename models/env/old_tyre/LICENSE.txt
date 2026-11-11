@@ -1,0 +1,6 @@
+Old Tyre (old_tyre)
+Source: https://polyhaven.com/a/old_tyre
+Author(s): MP
+License: CC0 1.0 Universal (public domain), https://polyhaven.com/license
+Type: model
+Files: old_tyre_2k.gltf, textures/old_tyre_nor_gl_2k.jpg, old_tyre.bin, textures/old_tyre_arm_2k.jpg, textures/old_tyre_diff_2k.jpg

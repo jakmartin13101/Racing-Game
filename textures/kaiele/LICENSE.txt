@@ -1,0 +1,18 @@
+Kai'ele ground, road and sky textures. All sources are CC0 1.0 (public domain); shrunk to 1K and packed
+(<key>_ar.webp: albedo + roughness in alpha; <key>_nao.jpg: normal XY + ambient occlusion).
+
+sand     ambientCG Ground054 (grain: albedo + height, normal)  https://ambientcg.com/a/Ground054
+         ambientCG Ground055S (wind ripples, normal)           https://ambientcg.com/a/Ground055S
+         packed by tools/kaiele_sand_tex.py: sand_ar.webp (2K albedo + height), sand_nn.webp (1K both normals)
+grass    ambientCG Grass004          https://ambientcg.com/a/Grass004
+litter   ambientCG Ground023         https://ambientcg.com/a/Ground023
+dirt     ambientCG Ground053         https://ambientcg.com/a/Ground053
+rock     ambientCG Rock035 (albedo brightened x4 in linear light)  https://ambientcg.com/a/Rock035
+coral    ambientCG Gravel023         https://ambientcg.com/a/Gravel023
+mud      ambientCG Ground051         https://ambientcg.com/a/Ground051
+planks   Poly Haven weathered_planks https://polyhaven.com/a/weathered_planks
+sky      Poly Haven kloofendal_48d_partly_cloudy_puresky (Greg Zaal, Jarod Guest), 4K HDR encoded to an 8-bit
+         dome texture: RGB = (L / lmax) ^ (1/2.2), from the zenith to 8 degrees below the horizon (see sky.json)
+         https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky
+
+ambientCG and Poly Haven assets are released under CC0: https://creativecommons.org/publicdomain/zero/1.0/

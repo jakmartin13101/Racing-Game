@@ -1,0 +1,50 @@
+{
+ "id": "bike_goat",
+ "name": "Mountain Goat",
+ "class": "bike",
+ "number": 9,
+ "model": "models/vehicles/bike_goat.glb",
+ "textures": "models/vehicles/bike_goat/",
+ "wheels": {
+  "wheel_F": {
+   "pos": [
+    -0.0,
+    -0.66,
+    -0.24
+   ],
+   "radius": 0.36
+  },
+  "wheel_R": {
+   "pos": [
+    0.0,
+    0.66,
+    -0.25
+   ],
+   "radius": 0.35
+  }
+ },
+ "steer": {
+  "pivot": [
+   -0.0,
+   -0.3673,
+   0.35
+  ],
+  "axis": [
+   -0.0,
+   0.3135,
+   0.4067
+  ]
+ },
+ "origin_height": 0.6,
+ "length": 2.13,
+ "width": 0.84,
+ "height": 1.2,
+ "tris": 56962,
+ "tune": {
+  "mass": 74,
+  "power": 0.42,
+  "grip": 1.2,
+  "top": 95
+ },
+ "blurb": "Trials bike: no seat, all grip, crawls over anything"
+}

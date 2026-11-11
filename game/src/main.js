@@ -45,6 +45,17 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 setAniso(Math.min(renderer.capabilities.getMaxAnisotropy(), quality.terrainStep > 3 ? 4 : 16));
+// which graphics card the picture is drawn on (shown in Settings; "ANGLE (NVIDIA, NVIDIA GeForce RTX … Direct3D11 …)")
+const gpu = (() => {
+  try {
+    const gl = renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info');
+    const raw = String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || '');
+    const m = raw.match(/^ANGLE \([^,]*, (.*), [^,]*\)$/);
+    const name = (m ? m[1] : raw).replace(/^ANGLE Metal Renderer: /, '').replace(/ \(0x[0-9a-f]+\)/i, '').replace(/ (Direct3D|OpenGL|Vulkan)\b.*$/i, '').replace(/\s+/g, ' ').trim();
+    const software = /swiftshader|llvmpipe|basic render|software/i.test(raw);
+    return { name: software ? 'software renderer' : name, software };
+  } catch { return { name: '', software: false }; }
+})();
 const ULTRA = !!quality.ultra;
 
 const scene = new THREE.Scene();
@@ -116,8 +127,9 @@ addStaticBoxes(phys, [...village.colliders, ...(island?.colliders || [])]);
 const debris = new Debris(phys);
 const breakables = new Breakables(phys, debris, [...props.handles, ...village.handles]);
 const crashFx = new CrashFx(M, scene, sun, !!quality.aiLod);
+crashFx.ground = world.heightAt;
 const skids = new SkidMarks(scene, params.has('noskid') ? 1 : quality.skids || 1000);
-const crash = { scene, debris, fx: crashFx, breakables, detail: quality.damageDetail, skids };
+const crash = { scene, debris, fx: crashFx, breakables, detail: quality.damageDetail, skids, boomT: params.has('boomt') ? +params.get('boomt') : null };
 scene.add(camera);
 loadStep(0.8, 'LOADING TRUCKS…');
 const assets = await loadTruckAssets(renderer);
@@ -165,8 +177,15 @@ function nearestLava(pos) {
 // ---------------------------------------------------------------- post-processing
 const composer = new EffectComposer(renderer, { frameBufferType: THREE.HalfFloatType });
 composer.addPass(new RenderPass(scene, camera));
+let ao = null;
 if (quality.ao) {
-  const ao = new N8AOPostPass(scene, camera, innerWidth, innerHeight);
+  ao = new N8AOPostPass(scene, camera, innerWidth, innerHeight);
+  // The pass ends by copying its picture into the composer's buffer, and it leaves the depth test on for that
+  // copy. The buffer has the scene's depth attached, and on some drivers (NVIDIA through Direct3D, for one) every
+  // pixel of the copy then fails the test: nothing is written, and bloom and everything after it get black, so
+  // High and Ultra showed a black screen. A full-screen copy needs no depth test.
+  for (const q of [ao.copyQuad, ao.accumulationQuad]) if (q?.material) { q.material.depthTest = false; q.material.depthWrite = false; }
+  if (params.has('breakao')) ao.copyQuad.material.colorWrite = false; // (test: fakes that failure, to check the start-up fallback)
   ao.configuration.aoRadius = 2.5;
   ao.configuration.distanceFalloff = 1.2;
   ao.configuration.intensity = 2.2;
@@ -185,13 +204,19 @@ grain.blendMode.opacity.value = 0.06;
 // Ultra adds sun shafts through the ash and depth of field to the bloom pass
 const shafts = ULTRA && !params.has('noshafts') ? new SunShafts(camera, sun) : null;
 const focusFx = ULTRA && !params.has('nodof') ? new Focus(camera) : null;
-composer.addPass(new EffectPass(camera, ...(focusFx ? [focusFx.effect] : []), bloom, ...(shafts ? [shafts.effect] : [])));
+const bloomPass = new EffectPass(camera, ...(focusFx ? [focusFx.effect] : []), bloom, ...(shafts ? [shafts.effect] : []));
+composer.addPass(bloomPass);
 const mblur = new MotionBlurEffect(quality.blurSamples);
-composer.addPass(new EffectPass(camera, mblur));
+const blurPass = new EffectPass(camera, mblur);
+composer.addPass(blurPass);
 // rain on the lens (its own pass: it bends the picture), skipped entirely in the dry
 const lensPass = weather.lens ? new EffectPass(camera, weather.lens) : null;
 if (lensPass) { lensPass.enabled = false; composer.addPass(lensPass); }
-composer.addPass(new EffectPass(camera, tone, grade, contrast, vignette, grain, new SMAAEffect({ preset: ULTRA ? SMAAPreset.ULTRA : SMAAPreset.MEDIUM })));
+const finalPass = new EffectPass(camera, tone, grade, contrast, vignette, grain, new SMAAEffect({ preset: ULTRA ? SMAAPreset.ULTRA : SMAAPreset.MEDIUM }));
+composer.addPass(finalPass);
+if (params.get('breakao') === 'all') finalPass.fullscreenMaterial.colorWrite = false; // (test: the whole effect chain fails)
+// last resort, set by the start-up check below: draw the world straight to the screen, with none of the effects
+let plain = false;
 
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
@@ -223,12 +248,13 @@ const hud = {
 let mapBase = null, mapFn = null;
 
 const ui = new UI({
-  tracks: menuTracks, settings: S, save: saveSettings,
+  tracks: menuTracks, settings: S, save: saveSettings, gpu,
   handlers: {
     start: startRace,
     resume: () => setPaused(false),
     restart: () => raceCfg && startRace(raceCfg),
     quitRace: () => toMenu(),
+    onMenu: (on) => { if (on) leaveRace(); },
     quit: () => window.close(),
     onCamera: (v) => rig.setMode(v),
     onTouch: () => { refreshTouch(); if (S.touchSteer === 'tilt') input.enableTilt(); },
@@ -257,13 +283,18 @@ function setPaused(p) {
   touchEl.hidden = p || !S.touchUi;
 }
 
-function toMenu() {
+// back in the main menus (which show stills, not the world): the race is cleared away
+function leaveRace() {
   race?.dispose();
   race = null;
   weather.setVehicles(null);
   state = 'menu';
   hud.root.hidden = true;
   touchEl.hidden = true;
+}
+
+function toMenu() {
+  leaveRace();
   ui.show(ui.champ && ui.champ.round > 0 ? 'world' : 'title', false);
 }
 
@@ -290,7 +321,7 @@ function startRace(cfg) {
   race.hazards = ISLAND ? new KaieleHazards({ phys, scene, world, track, fx: crashFx, M, lava, island, quality, events: race.events, breakables })
     : new Hazards({ phys, scene, world, track, fx: crashFx, M, lava, rockMat: props.models.boulder_01?.meshes[0]?.mat, quality, events: race.events });
   weather.adopt(scene);
-  slowT = 0; timeScale = 1; leapSlow = null; rig.cinematic(false); rig.leapShot(null);
+  slowT = 0; smashT = 0; timeScale = 1; leapSlow = null; rig.cinematic(false); rig.leapShot(null);
   hud.dmg.style.width = '0%';
   hud.msg.dataset.fin = '';
   if (params.has('auto')) race.player.ai = new AIDriver(race.player.v, track, DIFFICULTY.hard, mulberry(99));
@@ -311,6 +342,17 @@ function startRace(cfg) {
   rig.setMode(S.camera);
   lastCount = null;
   lapStart = 0; bestLap = null; lastLap = 0;
+  warmCrashShaders();
+}
+
+// Compile the shaders of what only shows in a crash (the engine bays, fireballs, shock rings, scorch marks) at
+// the start, so the first big smash doesn't stall while they build.
+function warmCrashShaders() {
+  const objs = [...race.cars.flatMap((c) => c.v.damage?.levels.map((L) => L.engine.group) || []), ...crashFx.hidden()];
+  const was = objs.map((o) => o.visible);
+  for (const o of objs) o.visible = true;
+  try { renderer.compile(scene, camera); } catch (e) { console.warn('shader warm-up', e); }
+  objs.forEach((o, i) => { o.visible = was[i]; });
 }
 
 let lastCount = null, lapStart = 0, bestLap = null, lastLap = 0;
@@ -379,6 +421,8 @@ const clock = new THREE.Clock();
 let t = 0, accum = 0, lastFrame = 0, fpsAvg = 60;
 // slow motion for the player's engine blowing: slowT counts down in real seconds
 let slowT = 0, timeScale = 1;
+// a short slow-motion beat on a big smash (real seconds), and when the last one was (game time)
+let smashT = 0, lastSmash = -99;
 // the crater leap: slow motion for the whole flight, slowest over the middle of the crater
 let leapSlow = null;
 let msgT = 0, blurAmt = 0;
@@ -387,13 +431,17 @@ function raceEvents() {
   for (const e of race.events.splice(0)) {
     const me = e.st ? e.st.isPlayer : true;
     if (e.type === 'knock') rig.bump(Math.min(0.25, 0.04 + e.dv * 0.03));
-    else if (e.type === 'hit' && me) rig.bump(Math.min(0.5, e.dv * 0.025));
+    else if (e.type === 'hit' && me) {
+      rig.bump(Math.min(0.5, e.dv * 0.025));
+      // a big smash plays for a moment in slow motion
+      if (e.dv > 13 && !slowT && !leapSlow && t - lastSmash > 5 && !e.st.v.damage.blown) { lastSmash = t; smashT = 1.3; }
+    }
     else if (e.type === 'part' && me && !e.st.v.damage.blown) toast(`${e.label} torn off`);
     else if (e.type === 'blown') {
       if (me) { slowT = 6; rig.cinematic(true); bigMsg('ENGINE BLOWN'); }
       else toast(`${e.st.v.name} blew the engine`);
     } else if (e.type === 'totaled') {
-      if (me && !e.st.v.damage.blown) bigMsg('TOTALED');
+      if (me && !e.st.v.damage.blown) { bigMsg('TOTALED'); smashT = 0; slowT = 6; rig.cinematic(true); }
       else if (!me && !e.st.v.damage.blown) toast(`${e.st.v.name} is wrecked`);
     } else if (e.type === 'dnf' && me) { if (!e.st.burned) bigMsg('DNF'); }
     else if (e.type === 'leap') {
@@ -410,11 +458,13 @@ function raceEvents() {
     else if (e.type === 'breakout') { toast('Lava breakout ahead!'); rig.bump(0.3); }
     else if (e.type === 'loose' && me && e.label) toast(`${e.label} hanging loose`);
     else if (e.type === 'tyre' && me) toast('Lost a wheel!');
+    else if (e.type === 'exploded' && !me) toast(`${e.st.v.name} went up in flames`);
     else if (e.type === 'toast' && me && e.text) toast(e.text); // track events (Kai'ele gusts, rockfall)
   }
 }
 const tmp = new THREE.Vector3();
 const focus = new THREE.Vector3();
+let camSt = null;
 const menuCentre = ISLAND ? new THREE.Vector3(-300, 0, 600) : new THREE.Vector3(-150, 0, 120);
 
 function simulate(dt) {
@@ -430,6 +480,8 @@ function simulate(dt) {
       if (params.has('blow') && race.clock > 1.5) { race.player.v.forceBlow = true; pin.boost = 1; pin.throttle = 1; if (race.player.v.boost > 0.12) race.player.v.boost = 0.12; }
       // ?lose=0..3 tears that tyre off the player's truck once the race is under way (for checking the physics)
       if (params.has('lose') && race.clock > 1 && !race.player.v.lostWheels.size) race.player.v.damage?.loseWheel(+params.get('lose'));
+      // ?dent=front:18,left:12,top:9 hits the player's truck that hard on those sides, one a step from 1 s in (crash checks)
+      if (params.has('dent') && race.clock > 1) dentTest(race.player.v);
       race.step(h, pin, S.steerAssist && !race.player.ai);
       if (TRACE && (TRACE.n++ % 30) === 0) TRACE.rows.push(`${race.t.toFixed(1)} F${race.hazards?.erupt?.flow.front.toFixed(0) ?? ""} ` + race.cars.map((c) => `${c.i}:${c.v.speed().toFixed(0)}:${c.v.contacts}${c.leap ? "L" : ""}:${(c.off ?? 0).toFixed(0)}:${(c.v.body.translation().y - race.track.at(c.i)[1]).toFixed(1)}`).join(' '));
       accum -= h;
@@ -447,12 +499,28 @@ function simulate(dt) {
   }
 }
 
+const DENTS = params.has('dent') ? params.get('dent').split(',').map((d) => d.split(':')) : [];
+function dentTest(v) {
+  const d = DENTS.shift();
+  if (!d || !v.damage) return;
+  const dirs = { front: [0, 0, 1], rear: [0, 0, -1], left: [1, 0, 0], right: [-1, 0, 0], top: [0, 1, 0], fl: [0.6, 0, 0.8], fr: [-0.6, 0, 0.8] };
+  const dl = new THREE.Vector3(...(dirs[d[0]] || dirs.front));
+  const dw = dl.clone().applyQuaternion(v.group.quaternion);
+  const pw = dl.clone().multiplyScalar(2.6).applyMatrix4(v.group.matrixWorld);
+  v.damage.hit(dw, +d[1] || 12, pw, d[0] === 'top');
+}
+
 function slowMotion(real) {
   // engine blow: about three seconds at a fifth of normal speed, easing back over the next three
   if (slowT > 0) {
     slowT = Math.max(0, slowT - real);
     timeScale = slowT > 2.6 ? 0.2 : 0.2 + 0.8 * (1 - slowT / 2.6) ** 2;
     if (slowT === 0) { timeScale = 1; rig.cinematic(false); }
+  }
+  if (smashT > 0 && !slowT) {
+    smashT = Math.max(0, smashT - real);
+    timeScale = smashT > 0.6 ? 0.28 : 0.28 + 0.72 * (1 - smashT / 0.6) ** 2;
+    if (smashT === 0) timeScale = 1;
   }
   if (leapSlow && state !== 'paused') {
     const u = leapSlow.done ? 1 : THREE.MathUtils.clamp(leapSlow.t / leapSlow.T, 0, 1);
@@ -469,7 +537,9 @@ function frame(real) {
   simulate(dt);
   if (race && (state === 'race' || state === 'paused' || state === 'results')) {
     race.sync(dt, t, dust, camera.position);
-    if (state !== 'paused') rig.update(real, race.player.v, race.track, race.player.i, race.player.v.boosting);
+    // (window.__follow: a test hook, the camera follows that truck instead of the player's, for tools/menu-shots.mjs)
+    camSt = race.cars[window.__follow] || race.player;
+    if (state !== 'paused') rig.update(real, camSt.v, race.track, camSt.i, camSt.v.boosting);
     const pv = race.player.v, spd = pv.speed();
     const inCar = rig.cine || rig.leapL ? 0 : 1;
     // camera motion blur grows with speed; boost adds a radial streak, redline adds colour fringing
@@ -477,7 +547,7 @@ function frame(real) {
     mblur.uniforms.get('uRadial').value = inCar * (fast * 0.012 + (pv.boosting ? 0.03 : 0));
     mblur.uniforms.get('uAber').value = inCar * ((pv.boosting ? 0.6 : 0) + (pv.redline ? 1.4 : 0));
     blurAmt = rig.cine || rig.leapL ? 0.25 : 0.55 + fast * 0.35;
-    focus.copy(race.player.v.group.position);
+    focus.copy(camSt.v.group.position);
     updateHud(real);
   } else {
     menuT += dt;
@@ -503,6 +573,8 @@ function frame(real) {
   ash.material.uniforms.uScale.value = innerHeight * renderer.getPixelRatio() * 0.6;
   dust.update(t);
   crashFx.update(t, dt);
+  // explosions shake the camera, more the closer they are
+  for (const b of crashFx.booms.splice(0)) rig.bump(Math.min(0.5, b.power * 0.4 / (1 + camera.position.distanceTo(b.pos) / 18)));
   ambient.update(t, dt, camera.position);
   weather.update(dt, t, camera, { lens: S.lensDrops !== false && !!race && state !== 'menu' && rig.mode !== 'tv' && !rig.cine && !rig.leapL, speed: race ? race.player.v.speed() : 0, dust, ambient, time: t });
   wind.uTime.value = weather.windTime;
@@ -523,13 +595,56 @@ function frame(real) {
   mblur.uniforms.get('uHaze').value = ULTRA ? Math.min(1.2, lp.strength * 1.6 + (race?.hazards?.lava?.front?.value > 0 ? 0.3 : 0)) : 0;
   mblur.uniforms.get('uTime').value = t;
   if (shafts) shafts.update(camera);
-  if (focusFx) focusFx.update(race && state !== 'menu' ? race.player.v.group.position : focus, !!rig.cine, race ? rig.mode : 'menu');
+  if (focusFx) focusFx.update(focus, !!rig.cine, race ? rig.mode : 'menu');
   mblur.track(camera, blurAmt);
-  composer.render(dt);
+  if (plain) renderer.render(scene, camera); else composer.render(dt);
   if (S.showFps) { fpsAvg += (1 / Math.max(real, 1e-3) - fpsAvg) * 0.05; hud.fps.textContent = `${Math.round(fpsAvg)} FPS`; }
   else hud.fps.textContent = '';
 }
 
+// Is the picture just drawn black all over? (A handful of small patches read back from the screen.)
+function drewBlack() {
+  const gl = renderer.getContext(), w = gl.drawingBufferWidth, h = gl.drawingBufferHeight, px = new Uint8Array(8 * 8 * 4);
+  for (const [u, v] of [[0.5, 0.5], [0.2, 0.3], [0.8, 0.3], [0.2, 0.75], [0.8, 0.75], [0.5, 0.85], [0.5, 0.15]]) {
+    gl.readPixels(Math.floor(w * u), Math.floor(h * v), 8, 8, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    for (let i = 0; i < px.length; i += 4) if (px[i] + px[i + 1] + px[i + 2] > 6) return false;
+  }
+  return true;
+}
+
+// The menus show stills, not the world, so nothing would build the world's shaders until the first race started.
+// Draw it once here, behind the loading screen, so that first race starts without a stall. It doubles as a check:
+// this view (the region under a daytime sky) is never black, so if it comes out black an effect is failing on
+// this graphics driver. Switch the optional ones off one at a time until there is a picture; if it is none of
+// those, draw without any of the effects. Either way there is a picture, and Settings says what was switched off.
+if (!params.has('still')) {
+  loadStep(0.96, 'WARMING UP…');
+  await new Promise((r) => setTimeout(r, 30));
+  try {
+    frame(1 / 60);
+    if (drewBlack()) {
+      const optional = [[ao, 'ambient shadows'], [blurPass, 'motion blur'], [bloomPass, 'bloom and depth of field']].filter(([pass]) => pass);
+      const off = [];
+      for (const [pass, label] of optional) {
+        pass.enabled = false;
+        off.push(label);
+        composer.render(1 / 60);
+        if (!drewBlack()) break;
+      }
+      let what = off.join(', ');
+      if (drewBlack()) {
+        for (const [pass] of optional) pass.enabled = true;
+        plain = true;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.render(scene, camera);
+        what = 'the screen effects';
+        if (drewBlack()) { plain = false; renderer.toneMapping = THREE.NoToneMapping; what = ''; }
+      }
+      console.warn(`graphics: the picture came out black on ${gpu.name}; ${what ? `fixed by switching off ${what}` : 'switching the effects off did not help'}`);
+      if (what) ui.gpuNote(`${what} switched off (they draw black on this driver)`);
+    }
+  } catch (e) { console.warn('warm-up frame', e); }
+}
 loadStep(1, 'READY');
 $('loading').remove();
 
@@ -538,6 +653,8 @@ if (params.has('race')) {
   startRace({ track: params.get('race'), laps: +(params.get('laps') || trackById(params.get('race')).laps), opponents: +(params.get('ai') ?? 5),
     difficulty: params.get('diff') || 'normal', paint: +(params.get('paint') || S.paint || 0), mode: 'quick', seed: 7 });
   if (params.has('cam')) rig.setMode(params.get('cam'));
+  // ?cine=A: the wreck camera, starting A radians round from the nose (screenshots of the damage)
+  if (params.has('cine')) { rig.cinematic(true); rig.cine.a = +params.get('cine'); rig.cineDist = +(params.get('cined') || 6.5); rig.cineH = +(params.get('cineh') || 1.4); rig.cineLook = +(params.get('cinel') || 1.2); }
   if (params.has('at')) {
     const f = race.track.frame(+params.get('at'));
     const yaw = f.yaw + +(params.get('yaw') || 0);
@@ -574,6 +691,7 @@ if (still) {
       burned: (race.hazards.erupt.flow.log || []).join(' '), erupting: !!race.hazards.erupt.erupting },
     knocked: breakables.items.filter((i) => i.state !== 'static').length, props: breakables.items.length, debris: debris.list.length };
   window.__race = race; window.__fx = crashFx; window.__skids = skids; window.__weather = weather; window.__frame = frame;
+  window.__step = frameNoRender; window.__rig = rig; // (tools/menu-shots.mjs steps on and moves the camera)
   window.__ready = true;
 } else {
   window.__ready = true;
@@ -586,9 +704,10 @@ function frameNoRender(real) {
   const dt = SLOW ? real * timeScale : real;
   t += dt;
   simulate(dt);
-  if (race) { race.sync(dt, t, null, camera.position); rig.update(dt, race.player.v, race.track, race.player.i, false); }
+  if (race) { race.sync(dt, t, null, camera.position); const c = race.cars[window.__follow] || race.player; rig.update(dt, c.v, race.track, c.i, false); }
   if (LOOK) camera.position.set(LOOK[0], LOOK[1], LOOK[2]);
   crashFx.update(t, dt);
+  crashFx.booms.length = 0;
   ambient.update(t, dt, camera.position);
   weather.update(dt, t, camera, { lens: S.lensDrops !== false && !!race, speed: race ? race.player.v.speed() : 0, time: t });
 }
@@ -596,6 +715,8 @@ function frameNoRender(real) {
 // frame cap: browser and phone builds default to 30 fps, the desktop app runs uncapped
 function loop(now) {
   requestAnimationFrame(loop);
+  // the menus show stills, not the world, so the graphics card idles until a race starts
+  if (state === 'menu') { clock.getDelta(); return; }
   const cap = S.fps || 0;
   if (cap && now - lastFrame < 1000 / cap - 2) return;
   const dt = Math.min(clock.getDelta(), 1 / 15);

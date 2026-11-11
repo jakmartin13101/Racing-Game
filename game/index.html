@@ -45,12 +45,15 @@
     </div>
   </div>
 
+  <!-- behind the menus: cinematic stills that fade into one another (src/menu.js) -->
+  <div id="backdrop" hidden></div>
+
   <!-- menus -->
   <div id="ui" hidden>
     <section id="s-title" class="screen">
       <div class="brand"><div class="logo">GRAVEL <b>RIOT</b></div><div class="sub">VOLCANIC REGION</div></div>
       <nav class="menu">
-        <button data-go="world">World Race<small>Three-event championship</small></button>
+        <button data-go="world">World Race<small>Four-event championship</small></button>
         <button data-go="quick">Quick Race<small>Pick a track, opponents and laps</small></button>
         <button data-go="settings">Settings<small>Graphics, frame rate, cameras, controls</small></button>
         <button data-go="quit" class="desktop-only">Quit</button>
@@ -72,6 +75,12 @@
       <nav class="actions"><button data-go="title" class="ghost">Back</button><button data-go="start-quick" class="primary">Start Race</button></nav>
     </section>
 
+    <!-- the track being picked, turning slowly with the pack running round it (wide screens; src/menu.js) -->
+    <aside id="trackview" aria-hidden="true">
+      <canvas id="trackanim"></canvas>
+      <div class="tv-info"><b id="tv-name"></b><span id="tv-facts"></span></div>
+    </aside>
+
     <section id="s-world" class="screen">
       <h2>World Race</h2>
       <p class="lede">Four events across the Volcanic Region. Points for the top eight; the most points after the Eruption finale takes the title. Every event gets its own random weather and time of day.</p>
@@ -87,6 +96,7 @@
       <h2>Settings</h2>
       <div class="opts" id="settingrows"></div>
       <p class="note" id="setnote"></p>
+      <p class="gpu" id="gpuline"></p>
       <nav class="actions"><button data-go="back" class="primary">Done</button></nav>
     </section>
 

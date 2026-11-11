@@ -3,6 +3,7 @@ import { CAMERAS } from './camera.js';
 import { platform } from './settings.js';
 import { regionById } from './regions.js';
 import { WEATHERS, TIMES, weathersFor, timesFor } from './weather/conditions.js';
+import { Backdrop, TrackPreview, trackFacts, EXTRA_SHOTS } from './menu.js';
 
 const $ = (id) => document.getElementById(id);
 const POINTS = [10, 8, 6, 5, 4, 3, 2, 1];
@@ -54,13 +55,19 @@ export function drawTrackShape(cv, track, { line = '#ffb41f', width = 4, bg = nu
 }
 
 export class UI {
-  constructor({ tracks, settings, save, handlers }) {
-    Object.assign(this, { tracks, s: settings, save, h: handlers });
+  constructor({ tracks, settings, save, handlers, gpu }) {
+    Object.assign(this, { tracks, s: settings, save, h: handlers, gpu });
     this.root = $('ui');
     this.stack = [];
     this.quick = { track: 'caldera', laps: 2, opponents: 5, difficulty: 'normal', weather: 'random', time: 'random' };
     this.champ = null;
     if (platform.desktopApp) document.body.classList.add('desktop');
+    // behind the menus: stills of every track and a few smashes, fading slowly into one another
+    this.backdrop = new Backdrop($('backdrop'));
+    this.shots = [];
+    tracks.forEach((t, i) => { this.shots.push(t.id); if (i % 2 === 1 && EXTRA_SHOTS[(i - 1) / 2]) this.shots.push(EXTRA_SHOTS[(i - 1) / 2]); });
+    this.preview = new TrackPreview($('trackanim'));
+    this.menuOn = false;
     this.root.addEventListener('click', (e) => {
       const b = e.target.closest('[data-go]');
       if (b) this.go(b.dataset.go);
@@ -76,12 +83,26 @@ export class UI {
     if (push && this.current && this.current !== id) this.stack.push(this.current);
     this.current = id;
     this.root.hidden = false;
+    this.root.dataset.screen = id;
     for (const s of this.root.querySelectorAll('.screen')) s.classList.toggle('on', s.id === `s-${id}`);
     this.focusFirst();
     if (id === 'world') this.renderEvents();
+    this.dress(id);
   }
 
-  hide() { this.root.hidden = true; this.current = null; this.stack = []; }
+  hide() { this.root.hidden = true; this.current = null; this.stack = []; this.menuOn = false; this.backdrop.show(false); this.preview.stop(); this.cardAnim?.stop(); }
+
+  // What is behind a screen. The main menus sit on the stills (the track picker on the picked track's own, the
+  // World Race on its events'); pause and results stay over the race; Settings keeps whatever it was opened over.
+  dress(id) {
+    const menu = id === 'title' || id === 'quick' || id === 'world' ? true : id === 'settings' ? this.menuOn || !this.stack.includes('pause') : false;
+    if (menu !== this.menuOn) { this.menuOn = menu; this.h.onMenu?.(menu); }
+    this.backdrop.show(menu);
+    if (!menu) return;
+    if (id === 'quick') { this.backdrop.hold(this.quick.track); this.preview.start(); this.cardAnim?.start(); }
+    else if (id === 'world') this.backdrop.play(EVENTS.map((e) => e.track), 8000);
+    else if (id === 'title' || !this.backdrop.list.length) this.backdrop.play(this.shots);
+  }
 
   go(where) {
     const h = this.h;
@@ -152,7 +173,23 @@ export class UI {
   }
 
   refreshQuick() {
-    for (const c of $('trackcards').children) c.classList.toggle('sel', c.dataset.track === this.quick.track);
+    const t = this.trackById(this.quick.track);
+    for (const c of $('trackcards').children) {
+      const sel = c.dataset.track === t.id, cv = c.firstChild;
+      c.classList.toggle('sel', sel);
+      // the picked card's map comes alive: the pack laps it; the card it leaves goes back to a plain outline
+      if (sel && this.cardAnim?.cv !== cv) {
+        if (this.cardAnim) { this.cardAnim.stop(); drawTrackShape(this.cardAnim.cv, this.cardAnim.track, { bg: '#1d1713', width: 5 }); }
+        this.cardAnim = new TrackPreview(cv, { flat: true });
+        this.cardAnim.set(t);
+      }
+    }
+    // beside the cards: the track turning in 3D, and its own still behind the menu
+    this.preview.set(t);
+    const f = trackFacts(t);
+    $('tv-name').textContent = t.name;
+    $('tv-facts').textContent = `${regionById(t.region || 'volcano').name} · ${t.closed ? 'Circuit' : 'Sprint'} · ${f.km.toFixed(1)} km · ${t.closed ? `${f.climb} m of climb a lap` : f.climb >= f.drop ? `${f.climb} m of climb` : `${f.drop} m of descent`}`;
+    if (this.current === 'quick') this.backdrop.hold(t.id);
     for (const el of this.root.querySelectorAll('.step')) el._refresh?.();
     const lapsRow = this.root.querySelector('[data-opt="laps"]').parentElement;
     lapsRow.style.opacity = this.trackById(this.quick.track).closed ? 1 : 0.4;
@@ -237,6 +274,15 @@ export class UI {
     add('Steering assist', 'Gently keeps the truck on the racing line', [true, false], ['On', 'Off'], 'steerAssist');
     add('Rain on lens', 'Drops on the camera in the wet', [true, false], ['On', 'Off'], 'lensDrops');
     add('Show FPS', '', [true, false], ['On', 'Off'], 'showFps');
+    this.gpuNote();
+  }
+
+  // which graphics card the game is drawing on, and anything it had to switch off to draw at all
+  gpuNote(extra) {
+    if (extra) this.gpuExtra = extra;
+    const g = this.gpu;
+    if (!g?.name) return;
+    $('gpuline').textContent = `${g.software ? 'No graphics card in use: drawing in software' : `Graphics card: ${g.name}`}${this.gpuExtra ? ` · ${this.gpuExtra}` : ''}`;
   }
 
   // ------------------------------------------------------------ results

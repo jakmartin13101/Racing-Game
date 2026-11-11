@@ -53,12 +53,13 @@ export class CameraRig {
       this.cine.a += dt * 0.35;
       const yaw = Math.atan2(fwd.set(0, 0, 1).applyQuaternion(q).x, fwd.z);
       const a = yaw + this.cine.a;
-      const pos = tmp.set(p.x + Math.sin(a) * 6.5, 0, p.z + Math.cos(a) * 6.5);
-      pos.y = Math.max(p.y + 1.4, this.world.heightAt(pos.x, pos.z) + 1);
+      const R = this.cineDist || 6.5;
+      const pos = tmp.set(p.x + Math.sin(a) * R, 0, p.z + Math.cos(a) * R);
+      pos.y = Math.max(p.y + (this.cineH ?? 1.4), this.world.heightAt(pos.x, pos.z) + 1);
       cam.position.copy(pos);
-      this.look.copy(p).addScaledVector(fwd.set(Math.sin(yaw), 0, Math.cos(yaw)), 1.5).add(up.set(0, 1.2, 0));
+      this.look.copy(p).addScaledVector(fwd.set(Math.sin(yaw), 0, Math.cos(yaw)), 1.5).add(up.set(0, this.cineLook ?? 1.2, 0));
       cam.lookAt(this.look);
-      cam.fov = 48; cam.updateProjectionMatrix();
+      cam.fov = this.cineFov || 48; cam.updateProjectionMatrix();
       return;
     }
     if (this.leapL) { this.leapCam(dt, p); return; }

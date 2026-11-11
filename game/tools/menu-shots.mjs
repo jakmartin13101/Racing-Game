@@ -25,7 +25,8 @@ export const SHOTS = {
   caldera: { q: 'race=caldera&ai=7&auto&weather=clear&time=day', step: 420, cam: { a: 0.35, d: 9, h: 0.8, l: 1.2, fov: 40 } },
   summit: { q: 'race=summit&ai=7&auto&weather=clear&time=day', step: 1100, car: 0, cam: { a: -0.5, d: 8, h: 1.2, l: 1 } },
   village: { q: 'race=village&ai=7&auto&weather=clear&time=evening', step: 1100, car: 0, cam: { a: -0.5, d: 8, h: 1.2, l: 1 } },
-  eruption: { q: 'race=eruption&ai=7&auto&weather=clear&time=evening', step: 2300, car: 0, cam: { a: 0.5, d: 7, h: 1, l: 1 } },
+  // (the leap across the crater: placed just short of the lip at launch speed, caught mid-flight over the lava lake)
+  eruption: { q: 'race=eruption&ai=0&at=3185&ram=34&auto&weather=clear&time=evening', step: 115, cam: { a: 2.9, d: 10, h: 5, l: -3, fov: 60 } },
   kahakai: { q: 'race=kahakai&ai=7&auto&weather=clear&time=day', step: 1300, car: 0, cam: { a: 0.45, d: 8, h: 0.9, l: 1.1, fov: 42 } },
   wailele: { q: 'race=wailele&ai=7&auto&weather=clear&time=day', step: 520, car: 0, cam: { a: 0.5, d: 7, h: 1, l: 1 } },
   palikai: { q: 'race=palikai&ai=7&auto&weather=clear&time=evening', step: 520, car: 0, cam: { a: 0.5, d: 7, h: 1, l: 1 } },

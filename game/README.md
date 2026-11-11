@@ -135,7 +135,7 @@ Cameras: chase, far chase, hood, bumper and trackside TV.
 `tools/truck/split.py` cuts the breakable parts out of the baked truck models.
 
 URL options: `?race=caldera|village|summit|eruption`, `&weather=clear|cloudy|lightrain|rain|heavyrain|storm|fog|snow|blizzard`, `&time=morning|day|evening|night` (`&anywx` ignores the track's climate), `&ai=N`, `&laps=N`, `&diff=easy|normal|hard`, `&cam=...`,
-`?q=low|medium|high|ultra`, `?sub=N` (physics substeps), `?nofog`, `?noshafts`, `?nodof`, `?noskid`, `?fps=N`, `?auto` (autopilot), `?blow` (force an engine blow), `?lose=0..3` (tear that tyre off the player's truck), `?at=N&yaw=R&ram=V` (crash test), `?dent=front:22,left:14,top:9` (hit the player's truck that hard on those sides, from 1 s in), `?boomt=S` (a wreck's tank goes up S seconds after it is totaled), `?cine=A&cined=D&cineh=H&cinel=L` (the wreck camera at a fixed angle, distance and height, for damage shots), `?lava=N` (Eruption: start the lava N m behind the truck placed with `at`), `?screen=quick|world|settings` (open on that menu), `?breakao` (fake a black picture from the ambient occlusion pass, to check the start-up fallback), `?trace` (log truck progress), `?look=x,y,z,tx,ty,tz` (a fixed camera, for scenery shots), `?still=N` (render one frame after N simulated steps,
+`?q=low|medium|high|ultra`, `?sub=N` (physics substeps), `?nofog`, `?noshafts`, `?nodof`, `?noskid`, `?fps=N`, `?auto` (autopilot), `?blow` (force an engine blow), `?lose=0..3` (tear that tyre off the player's truck), `?at=N&yaw=R&ram=V` (crash test), `?dent=front:22,left:14,top:9` (hit the player's truck that hard on those sides, from 1 s in), `?boomt=S` (a wreck's tank goes up S seconds after it is totaled), `?cine=A&cined=D&cineh=H&cinel=L` (the wreck camera at a fixed angle, distance and height, for damage shots), `?lava=N` (Eruption: start the lava N m behind the truck placed with `at`), `?screen=quick|world|settings` (open on that menu), `?breakao` (fake a black picture from the ambient occlusion pass, to check the start-up fallback; `?breakao=all` fakes one from the whole effect chain), `?trace` (log truck progress), `?look=x,y,z,tx,ty,tz` (a fixed camera, for scenery shots), `?still=N` (render one frame after N simulated steps,
 used for headless captures).
 
 ## Code
@@ -156,8 +156,8 @@ wrapper is `electron/main.cjs`, and `electron/installer.nsi` builds the installe
 post-processing buffer with the depth test left on, and on some drivers (NVIDIA through Direct3D, which is what the
 Windows app uses) every pixel of that copy fails the test, so the whole frame came out black with no error anywhere.
 `main.js` turns the depth test off on that copy. As a safety net the start-up frame drawn behind the loading screen
-is read back: if it is black, the optional effects are switched off one at a time until there is a picture, and
-Settings says which. The desktop app also writes `%APPDATA%\Gravel Riot\gravel-riot.log` each run: the graphics
+is read back: if it is black, the optional effects are switched off one at a time until there is a picture (and if
+it is none of those, the game draws without the effect chain at all), and Settings says which. The desktop app also writes `%APPDATA%\Gravel Riot\gravel-riot.log` each run: the graphics
 cards found, warnings and errors from the game, and any graphics process that died.
 
 ## Truck and environment

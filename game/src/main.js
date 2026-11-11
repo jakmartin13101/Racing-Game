@@ -212,7 +212,11 @@ composer.addPass(blurPass);
 // rain on the lens (its own pass: it bends the picture), skipped entirely in the dry
 const lensPass = weather.lens ? new EffectPass(camera, weather.lens) : null;
 if (lensPass) { lensPass.enabled = false; composer.addPass(lensPass); }
-composer.addPass(new EffectPass(camera, tone, grade, contrast, vignette, grain, new SMAAEffect({ preset: ULTRA ? SMAAPreset.ULTRA : SMAAPreset.MEDIUM })));
+const finalPass = new EffectPass(camera, tone, grade, contrast, vignette, grain, new SMAAEffect({ preset: ULTRA ? SMAAPreset.ULTRA : SMAAPreset.MEDIUM }));
+composer.addPass(finalPass);
+if (params.get('breakao') === 'all') finalPass.fullscreenMaterial.colorWrite = false; // (test: the whole effect chain fails)
+// last resort, set by the start-up check below: draw the world straight to the screen, with none of the effects
+let plain = false;
 
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
@@ -593,7 +597,7 @@ function frame(real) {
   if (shafts) shafts.update(camera);
   if (focusFx) focusFx.update(focus, !!rig.cine, race ? rig.mode : 'menu');
   mblur.track(camera, blurAmt);
-  composer.render(dt);
+  if (plain) renderer.render(scene, camera); else composer.render(dt);
   if (S.showFps) { fpsAvg += (1 / Math.max(real, 1e-3) - fpsAvg) * 0.05; hud.fps.textContent = `${Math.round(fpsAvg)} FPS`; }
   else hud.fps.textContent = '';
 }
@@ -610,27 +614,34 @@ function drewBlack() {
 
 // The menus show stills, not the world, so nothing would build the world's shaders until the first race started.
 // Draw it once here, behind the loading screen, so that first race starts without a stall. It doubles as a check:
-// this view (the volcano under a daytime sky) is never black, so if it comes out black an effect is failing on
-// this graphics driver. Switch the optional ones off one at a time until there is a picture, and say so in Settings.
-const toMenus = !params.has('race') && !pending;
-if (toMenus && !params.has('still')) {
+// this view (the region under a daytime sky) is never black, so if it comes out black an effect is failing on
+// this graphics driver. Switch the optional ones off one at a time until there is a picture; if it is none of
+// those, draw without any of the effects. Either way there is a picture, and Settings says what was switched off.
+if (!params.has('still')) {
   loadStep(0.96, 'WARMING UP…');
   await new Promise((r) => setTimeout(r, 30));
   try {
     frame(1 / 60);
     if (drewBlack()) {
+      const optional = [[ao, 'ambient shadows'], [blurPass, 'motion blur'], [bloomPass, 'bloom and depth of field']].filter(([pass]) => pass);
       const off = [];
-      for (const [pass, label] of [[ao, 'ambient shadows'], [blurPass, 'motion blur'], [bloomPass, 'bloom and depth of field']]) {
-        if (!pass) continue;
+      for (const [pass, label] of optional) {
         pass.enabled = false;
         off.push(label);
         composer.render(1 / 60);
         if (!drewBlack()) break;
       }
-      const fixed = !drewBlack();
-      console.warn(`graphics: the picture came out black on ${gpu.name}; ${fixed ? `fixed by switching off ${off.join(', ')}` : 'switching the effects off did not help'}`);
-      if (fixed) ui.gpuNote(`${off.join(', ')} switched off (they draw black on this driver)`);
-      else for (const pass of [ao, blurPass, bloomPass]) if (pass) pass.enabled = true;
+      let what = off.join(', ');
+      if (drewBlack()) {
+        for (const [pass] of optional) pass.enabled = true;
+        plain = true;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.render(scene, camera);
+        what = 'the screen effects';
+        if (drewBlack()) { plain = false; renderer.toneMapping = THREE.NoToneMapping; what = ''; }
+      }
+      console.warn(`graphics: the picture came out black on ${gpu.name}; ${what ? `fixed by switching off ${what}` : 'switching the effects off did not help'}`);
+      if (what) ui.gpuNote(`${what} switched off (they draw black on this driver)`);
     }
   } catch (e) { console.warn('warm-up frame', e); }
 }

@@ -93,19 +93,39 @@ Cameras: chase, far chase, hood, bumper and trackside TV.
 - **Knock-down props**: barrels, tyres, crates, gas bottles, jerry cans, benches, tables, corner chevrons,
   concrete barriers and street lamps fly or topple when hit, and take speed off the truck in proportion to their
   weight. Barriers and lamps stand firm below about 45 and 18 km/h. Buildings and trees are solid.
-- **Truck damage** (all trucks): soft-body dents push the panels in where they are hit, more detailed on
-  higher graphics settings. Panels work loose before they go: the bonnet pops and buckles up, doors and
-  bumpers hang and flap at speed, then break off (mirrors, bumpers, light bar, spare tyres, doors, bonnet).
-  A hard hit on a wheel bends it (the truck pulls to that side), and a harder one tears it off.
-  Volcanic bombs and boulders do damage too. Damage costs power and top speed; at 100% the truck is
-  totaled, coasts to a stop and is out (DNF), unless it rolls over the finish line first.
+- **Truck damage** (all trucks): the body is soft. A lattice of nodes around each truck crumples where it is hit,
+  deepest in the nose and the bed (the cab's cage holds better): metal pushed in buckles the panels around it
+  outwards, big side hits bow the whole chassis, nose and tail hits kink it, rolling onto the roof crushes the cab,
+  and the frame shudders and wobbles for a moment after each blow. Every part of the truck (paint, glass, lamps,
+  the engine) bends with it in the vertex shader, and finer dents and crinkles are pressed into the panels on top.
+  Panels work loose before they go: the bonnet pops and buckles up, doors and bumpers hang and flap at speed, then
+  break off (mirrors, bumpers, light bar, spare tyres, doors, bonnet) keeping the shape they were crushed into.
+  Windows craze into a web of cracks and then burst out in a shower of glass; headlamps and tail lights smash,
+  flicker and go dark (at night their beams go too). Hard hits throw off flakes of paint and bits of trim, a holed
+  radiator streams white steam before the oil smoke starts, and a truck on its side or roof grinds along in sparks.
+  A hard hit on a wheel bends it (the truck pulls to that side), and a harder one tears it off. Volcanic bombs and
+  boulders do damage too. Damage costs power and top speed; at 100% the truck is totaled, coasts to a stop and is
+  out (DNF), unless it rolls over the finish line first. A big smash on the player's truck plays for a moment in
+  slow motion.
+- **Wrecks explode**: a totaled truck catches fire in the engine bay, and a second or two later its fuel tank goes
+  up. The fireball throws the truck up and over, bulges the body, blows out the glass and most of what is still
+  bolted on, and leaves the wreck burning along its whole length.
+- **Explosions**: boiling fireballs that roll upwards and cool from white-hot through orange into a black smoke ball,
+  a shock ring along the ground and a heat shell, flame tongues, shrapnel sparks and long-burning embers, a dust
+  ring, a smoke column, a scorch mark left on the ground, a flickering flash of light and a camera shake that
+  falls off with distance.
+- **Engine bay**: with the bonnet popped or gone you see the engine: a 90-degree V8 with ribbed red valve covers,
+  a cast intake and runners, a distributor with red plug leads, heat-tinted headers into collectors, the front
+  drive (crank damper, water pump, alternator, power steering pump, idler and tensioner on a serpentine belt),
+  a radiator with a shrouded fan, hoses, battery, reservoirs and wiring. It rocks on its mounts, the pulleys and
+  fan turn with the revs, and the headers glow at high revs and in a fire.
 - **Boost**: the camera shakes hard in the last 10% of the tank. Running it dry at full boost blows the engine one
-  time in five: slow motion, bonnet and pistons out, fire and smoke, and the truck is totaled.
+  time in five: slow motion, bonnet, pistons and a valve cover out, fire and smoke, and the truck is totaled.
 
 `tools/truck/split.py` cuts the breakable parts out of the baked truck models.
 
 URL options: `?race=caldera|village|summit|eruption`, `&weather=clear|cloudy|lightrain|rain|heavyrain|storm|fog|snow|blizzard`, `&time=morning|day|evening|night` (`&anywx` ignores the track's climate), `&ai=N`, `&laps=N`, `&diff=easy|normal|hard`, `&cam=...`,
-`?q=low|medium|high|ultra`, `?sub=N` (physics substeps), `?nofog`, `?noshafts`, `?nodof`, `?noskid`, `?fps=N`, `?auto` (autopilot), `?blow` (force an engine blow), `?lose=0..3` (tear that tyre off the player's truck), `?at=N&yaw=R&ram=V` (crash test), `?lava=N` (Eruption: start the lava N m behind the truck placed with `at`), `?trace` (log truck progress), `?look=x,y,z,tx,ty,tz` (a fixed camera, for scenery shots), `?still=N` (render one frame after N simulated steps,
+`?q=low|medium|high|ultra`, `?sub=N` (physics substeps), `?nofog`, `?noshafts`, `?nodof`, `?noskid`, `?fps=N`, `?auto` (autopilot), `?blow` (force an engine blow), `?lose=0..3` (tear that tyre off the player's truck), `?at=N&yaw=R&ram=V` (crash test), `?dent=front:22,left:14,top:9` (hit the player's truck that hard on those sides, from 1 s in), `?boomt=S` (a wreck's tank goes up S seconds after it is totaled), `?cine=A&cined=D&cineh=H&cinel=L` (the wreck camera at a fixed angle, distance and height, for damage shots), `?lava=N` (Eruption: start the lava N m behind the truck placed with `at`), `?trace` (log truck progress), `?look=x,y,z,tx,ty,tz` (a fixed camera, for scenery shots), `?still=N` (render one frame after N simulated steps,
 used for headless captures).
 
 ## Code
@@ -116,7 +136,8 @@ ride height, droop, drop landings, body roll and what happens when a tyre is tor
 `src/main.js` (app state and loop), `world.js` (terrain, materials, lava), `track.js` (track geometry
 queries), `vehicle.js` (truck physics and visuals), `ai.js` (opponent drivers), `race.js` (grid, laps,
 respawns, results), `camera.js` (the TV camera checks its line of sight and moves when terrain or a building gets in the way),
-`hazards.js` (bombs, boulders, the Caldera lava breakout), `eruption.js` (Eruption's heaves, fissures, crater leap, lava fountains, lava flow and road rocks), `ultra.js` (height fog, sun shafts, depth of field, tyre marks), `weather/` (sky, time of day, rain, snow, lightning, wet surfaces, truck lights), `damage.js`, `crash.js`, `fx.js` (smoke, fire,
+`hazards.js` (bombs, boulders, the Caldera lava breakout), `eruption.js` (Eruption's heaves, fissures, crater leap, lava fountains, lava flow and road rocks), `ultra.js` (height fog, sun shafts, depth of field, tyre marks), `weather/` (sky, time of day, rain, snow, lightning, wet surfaces, truck lights), `damage.js` (zones, parts, glass, lamps, fire), `softbody.js` (the crumple lattice and its shader patch),
+`engine.js` (the procedural engine bay), `explosion.js` (fireballs, shock rings, scorch marks), `crash.js`, `fx.js` (smoke, fire,
 motion blur), `input.js` (keyboard, gamepad, touch, tilt), `ui.js` / `ui.css` (menus,
 HUD), `settings.js` (presets and saved settings), `props.js` and `village.js` (scenery). The desktop
 wrapper is `electron/main.cjs`, and `electron/installer.nsi` builds the installer.

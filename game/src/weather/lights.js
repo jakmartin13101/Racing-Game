@@ -96,17 +96,21 @@ export class TruckLights {
       if (cam) { this.v.set(0, 0, 1).applyQuaternion(t.v.group.quaternion); front = this.v.dot(this.d.copy(cam).sub(t.v.group.position).normalize()); }
       const fk = THREE.MathUtils.smoothstep(front, -0.15, 0.6), bk = THREE.MathUtils.smoothstep(-front, -0.3, 0.4);
       const hs = 0.55 + fogK * 0.5;
-      for (const s of t.heads) { s.scale.setScalar((s.userData.bar ? 0.5 : hs) * (0.7 + level * 0.5) * fk); s.visible = fk > 0.01; }
+      // smashed lamps stay dark (the light bar goes when it is torn off)
+      const B = t.v.damage?.broken || {};
+      const barGone = B.bar || t.v.damage?.lost.has('lightbar');
+      for (const s of t.heads) { s.scale.setScalar((s.userData.bar ? 0.5 : hs) * (0.7 + level * 0.5) * fk); s.visible = fk > 0.01 && !(s.userData.bar ? barGone : B.head); }
       const brake = t.v.input.brake > 0.1 && t.v.speed() > 1 ? 1 : 0;
-      for (const s of t.tails) { s.scale.setScalar((0.16 + brake * 0.14) * (0.4 + 0.6 * bk)); s.material.color.setRGB(1, 0.05, 0.02).multiplyScalar(1.2 + brake * 2.5); }
+      for (const s of t.tails) { s.visible = !B.tail; s.scale.setScalar((0.16 + brake * 0.14) * (0.4 + 0.6 * bk)); s.material.color.setRGB(1, 0.05, 0.02).multiplyScalar(1.2 + brake * 2.5); }
       if (t.pool) t.pool.material.opacity = 0.35 * level;
     }
     this.headMat.color.setRGB(1, 0.93, 0.8).multiplyScalar(2 + level * 3);
     // the player's beams follow the truck
     const p = this.player;
     const sOn = on && p && !p.totaled;
-    this.spots[0].intensity = sOn ? 260 * level : 0;
-    this.spots[1].intensity = sOn ? 420 * level : 0;
+    const PB = p?.damage?.broken || {};
+    this.spots[0].intensity = sOn && !PB.head ? 260 * level : 0;
+    this.spots[1].intensity = sOn && !PB.bar && !p.damage?.lost.has('lightbar') ? 420 * level : 0;
     if (p) {
       p.group.updateMatrixWorld();
       const m = p.group.matrixWorld;

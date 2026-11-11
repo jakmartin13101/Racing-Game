@@ -244,6 +244,7 @@ function hubMesh(side) {
 export class Vehicle {
   constructor({ phys, scene, assets, paint = PAINTS[0], lodOnly = false, name = '', number = 0, isPlayer = false, crash = null }) {
     Object.assign(this, { phys, scene, name, number, isPlayer, paint });
+    this.mats = assets.mats;
     this.input = { throttle: 0, brake: 0, steer: 0, hand: 0, boost: 0 };
     this.boost = 1;
     this.power = 1;

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
 import { Effect, EffectAttribute } from 'postprocessing';
 import { mulberry } from './world.js';
+import { Fireballs, Shock, Scorch } from './explosion.js';
 
 // how bright the daylight is on smoke, steam and dust (the weather dims it for night and storms)
 export const SMOKE_LIGHT = { value: new THREE.Color(1, 1, 1) };
@@ -266,7 +267,8 @@ function flameTexture() {
 
 // Instanced billboards with per-particle birth, velocity, size and life.
 // kinds: 'smoke' alpha-blended and lit; 'fire' additive puffs white -> orange -> dark red;
-// 'flame' additive tongues stretched upwards; 'spark' small hot streaks stretched along their motion.
+// 'flame' additive tongues stretched upwards; 'spark' small hot streaks stretched along their motion;
+// 'glass' tumbling shards that glint as they turn; 'bits' tumbling flakes of paint, trim and grit.
 export class Puffs {
   constructor(M, max, kind, tex = M.smoke) {
     this.max = max; this.i = 0; this.kind = kind;
@@ -280,14 +282,15 @@ export class Puffs {
     this.attrs = [mk(this.p, 'pb'), mk(this.v, 'vs'), mk(this.c, 'cl')];
     geo.instanceCount = max;
     for (let i = 0; i < max; i++) this.p[i * 4 + 3] = -999;
-    const hot = kind !== 'smoke';
-    const drag = kind === 'spark' ? '0.5' : kind === 'flame' ? '0.2' : kind === 'fire' ? '0.9' : '1.8';
-    const grav = kind === 'spark' ? '-9.0' : '0.0';
+    const hot = kind !== 'smoke' && kind !== 'bits';
+    const solid = kind === 'glass' || kind === 'bits';
+    const drag = kind === 'spark' ? '0.5' : kind === 'flame' ? '0.2' : kind === 'fire' ? '0.9' : solid ? '0.35' : '1.8';
+    const grav = kind === 'spark' ? '-9.0' : solid ? '-9.8' : '0.0';
     this.mat = new THREE.ShaderMaterial({
       transparent: true, depthWrite: false, blending: hot ? THREE.AdditiveBlending : THREE.NormalBlending,
       uniforms: { uTime: { value: 0 }, tTex: { value: tex }, uSun: { value: new THREE.Vector3(0, 1, 0) }, uLight: SMOKE_LIGHT,
-        uRise: { value: kind === 'fire' ? 2.4 : kind === 'flame' ? 0.6 : kind === 'spark' ? 0 : 1.4 },
-        uGrow: { value: kind === 'spark' ? 0.0 : kind === 'flame' ? 0.3 : kind === 'fire' ? 1.6 : 2.6 } },
+        uRise: { value: kind === 'fire' ? 2.4 : kind === 'flame' ? 0.6 : kind === 'spark' || solid ? 0 : 1.4 },
+        uGrow: { value: kind === 'spark' || solid ? 0.0 : kind === 'flame' ? 0.3 : kind === 'fire' ? 1.6 : 2.6 } },
       vertexShader: /* glsl */`
         attribute vec4 pb; attribute vec4 vs; attribute vec4 cl; uniform float uTime, uRise, uGrow;
         varying vec2 vUv; varying float vAge; varying vec3 vCol; varying vec3 vR, vU, vF; varying float vSeed;
@@ -310,7 +313,14 @@ export class Puffs {
           mv.xy += perp * position.x * size + dir * position.y * (size + L * 0.035);` : kind === 'flame' ? `
           // tongues stand upright, base at the emitter, flickering in width
           float fl = 0.85 + 0.3 * sin(uTime * 23.0 + vSeed * 40.0);
-          mv.xy += vec2(position.x * size * fl, (position.y + 0.45) * size * 1.9);` : `
+          mv.xy += vec2(position.x * size * fl, (position.y + 0.45) * size * 1.9);` : solid ? `
+          // tumbling: spin in the screen plane and flip edge-on and back
+          float rot = vSeed * 6.283 + t * (7.0 + vSeed * 9.0);
+          vec2 c = vec2(cos(rot), sin(rot));
+          float flip = cos(t * (5.0 + vSeed * 11.0) + vSeed * 20.0);
+          vec2 q = vec2(position.x * (0.25 + 0.75 * abs(flip)), position.y * (0.6 + vSeed * 0.6));
+          mv.xy += vec2(q.x * c.x - q.y * c.y, q.x * c.y + q.y * c.x) * size;
+          vSeed = flip;` : `
           float rot = vSeed * 6.283 + t * 0.4;
           vec2 c = vec2(cos(rot), sin(rot));
           mv.xy += vec2(position.x * c.x - position.y * c.y, position.x * c.y + position.y * c.x) * size;`}
@@ -337,7 +347,17 @@ export class Puffs {
           vec3 hot = mix(vec3(3.4, 2.4, 1.2), vec3(2.4, 0.68, 0.1), smoothstep(0.0, 0.25, vAge));
           hot = mix(hot, vec3(0.3, 0.04, 0.01), smoothstep(0.25, 0.9, vAge));
           float a = s.a * (1.0 - smoothstep(0.45, 1.0, vAge)) * smoothstep(0.0, 0.04, vAge + 0.02) * 0.6;
-          gl_FragColor = vec4(hot * vCol * a, a);` : `
+          gl_FragColor = vec4(hot * vCol * a, a);` : kind === 'glass' ? `
+          // a shard: a sharp triangle that flashes as it turns to face the light
+          vec2 d = vUv - 0.5;
+          float tri = step(abs(d.x) * 1.7, 0.5 - (d.y + 0.5) * 0.5 + 0.05) * step(-0.5, d.y);
+          float glint = pow(abs(vSeed), 24.0) * 5.0 + 0.25;
+          float a = tri * (1.0 - smoothstep(0.75, 1.0, vAge));
+          gl_FragColor = vec4(vCol * glint * a * uLight, a);` : kind === 'bits' ? `
+          vec2 d = abs(vUv - 0.5);
+          float a = step(d.x + d.y * 0.6, 0.45) * (1.0 - smoothstep(0.8, 1.0, vAge));
+          if (a < 0.5) discard;
+          gl_FragColor = vec4(vCol * (0.55 + 0.45 * abs(vSeed)) * uLight, 1.0);` : `
           vec4 s = texture2D(tTex, vUv);
           vec3 n = normalize((s.r * 2.0 - 1.0) * vR + (s.g * 2.0 - 1.0) * vU + (s.b * 2.0 - 1.0) * vF);
           float lit = clamp(dot(n, uSun) * 0.5 + 0.55, 0.0, 1.0);
@@ -369,15 +389,47 @@ export class CrashFx {
     this.smoke = new Puffs(M, lite ? 320 : 800, 'smoke');
     this.fire = new Puffs(M, lite ? 200 : 480, 'fire');
     this.flame = new Puffs(M, lite ? 160 : 360, 'flame', flameTexture());
-    this.spark = new Puffs(M, lite ? 160 : 400, 'spark');
+    this.spark = new Puffs(M, lite ? 200 : 520, 'spark');
+    this.shards = new Puffs(M, lite ? 160 : 400, 'glass');
+    this.bits = new Puffs(M, lite ? 120 : 300, 'bits');
     this.smoke.mat.uniforms.uSun.value.copy(sun);
-    scene.add(this.smoke.mesh, this.fire.mesh, this.flame.mesh, this.spark.mesh);
-    this.flash = new THREE.PointLight(0xff7a2a, 0, 34, 2);
+    scene.add(this.smoke.mesh, this.fire.mesh, this.flame.mesh, this.spark.mesh, this.shards.mesh, this.bits.mesh);
+    this.balls = new Fireballs(scene, lite);
+    this.shock = new Shock(scene);
+    this.scorch = new Scorch(scene, lite ? 4 : 8);
+    this.flash = new THREE.PointLight(0xff7a2a, 0, 40, 2);
     this.fireLight = new THREE.PointLight(0xff6a1a, 0, 16, 2);
     scene.add(this.flash, this.fireLight);
     this.flashT = 0;
     this.time = 0;
     this.fireK = 0;
+    // ground height (set by the game) for scorch marks, shock rings and scraping sparks
+    this.ground = null;
+    // explosions this frame, for the camera to feel: { pos, power }
+    this.booms = [];
+  }
+  // the explosion meshes that sit hidden until needed (for compiling their shaders up front)
+  hidden() { return [...this.balls.list.map((f) => f.m), ...this.shock.list.flatMap((s) => [s.ring, s.shell]), ...this.scorch.list.map((s) => s.m)]; }
+  // paint flakes, bits of trim and grit knocked off in a hit: carry is the truck's velocity
+  chips(pos, dir, carry, time, n = 10) {
+    const v = new THREE.Vector3();
+    for (let k = 0; k < n; k++) {
+      v.copy(dir).multiplyScalar(2 + Math.random() * 5).add(new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.9 + 0.3, Math.random() - 0.5).multiplyScalar(5));
+      v.x += carry.x * 0.8; v.y += carry.y * 0.5; v.z += carry.z * 0.8;
+      const c = Math.random() < 0.6 ? 0.04 + Math.random() * 0.05 : 0.35 + Math.random() * 0.2;
+      this.bits.emit(pos, v, 0.04 + Math.random() * 0.07, time, 0.9 + Math.random() * 0.8, c, c * 0.97, c * 0.93);
+    }
+  }
+  // a burst of broken glass; tint 1 clear, 0 red (a tail-light lens)
+  glass(pos, dir, carry, time, n = 30, size = 0.5, tint = 1) {
+    const v = new THREE.Vector3();
+    for (let k = 0; k < n; k++) {
+      v.copy(dir).multiplyScalar(1.5 + Math.random() * 4).add(new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.8 + 0.2, Math.random() - 0.5).multiplyScalar(4));
+      v.x += carry.x * 0.85; v.y += carry.y * 0.6; v.z += carry.z * 0.85;
+      const r = tint ? 0.75 : 0.9, g = tint ? 0.85 : 0.08, b = tint ? 0.9 : 0.04;
+      this.shards.emit(pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * size, (Math.random() - 0.5) * size * 0.5, (Math.random() - 0.5) * size)), v,
+        0.03 + Math.random() * 0.06, time, 0.8 + Math.random() * 0.9, r, g, b);
+    }
   }
   // carry: velocity of the thing that exploded, so the fireball travels with it
   burst(pos, time, power = 1, carry = null) {
@@ -399,38 +451,61 @@ export class CrashFx {
     this.flash.position.copy(pos);
     this.flashT = Math.max(this.flashT, power * 0.8);
   }
-  // a full engine explosion: white core flash, rolling fireball, flame tongues, shrapnel sparks,
-  // a ground-hugging dust ring and a thick black column
+  // A full explosion: a white-hot core flash, a cluster of boiling fireballs that roll upwards and cool into
+  // a black smoke ball, a shock ring along the ground and a heat shell, flame tongues, shrapnel sparks and
+  // burning embers on long arcs, a ground-hugging dust ring, a thick black column, a scorch mark, and a flash
+  // of light that flickers as it dies.
   explode(pos, time, power = 1.5, carry = null) {
     const v = new THREE.Vector3();
     const c = carry || new THREE.Vector3();
     const n = this.lite ? 0.6 : 1;
-    for (let k = 0; k < 4; k++) this.fire.emit(pos, v.copy(c).multiplyScalar(0.95), 2.2 * power, time, 0.22, 1.4, 1.3, 1.2);
-    for (let k = 0; k < 44 * power * n; k++) {
+    const gy = this.ground ? this.ground(pos.x, pos.z) : pos.y - 1;
+    // fireballs: one big heart, satellites thrown outwards and up, a late lazy one that rolls up the column
+    const R = 1.0 + power * 0.55;
+    this.balls.spawn(pos, R, v.copy(c).multiplyScalar(0.6).add(new THREE.Vector3(0, 2, 0)), 2.4 + power * 0.4, 0, 1);
+    const sat = Math.round((this.lite ? 3 : 5) + power);
+    for (let k = 0; k < sat; k++) {
+      const a = (k / sat) * Math.PI * 2 + Math.random() * 0.6;
+      const out = new THREE.Vector3(Math.cos(a), 0.5 + Math.random() * 0.9, Math.sin(a)).normalize();
+      this.balls.spawn(pos.clone().addScaledVector(out, R * 0.3), R * (0.45 + Math.random() * 0.35), out.multiplyScalar(3 + Math.random() * 3 * power).addScaledVector(c, 0.7),
+        1.6 + Math.random() * 1.2, Math.random() * 0.12, 0.9);
+    }
+    this.balls.spawn(pos.clone().add(new THREE.Vector3(0, R * 0.4, 0)), R * 0.9, new THREE.Vector3(c.x * 0.4, 6, c.z * 0.4), 3.4, 0.25, 0.55);
+    this.shock.spawn(pos, gy, Math.min(1.6, 0.6 + power * 0.35));
+    if (this.ground && pos.y - gy < 4) this.scorch.spawn(pos, 4 + power * 2.2, this.ground);
+    for (let k = 0; k < 3; k++) this.fire.emit(pos, v.copy(c).multiplyScalar(0.95), 1.5 * power, time, 0.16, 1.3, 1.15, 1.0);
+    for (let k = 0; k < 30 * power * n; k++) {
       v.set(Math.random() - 0.5, Math.random() * 0.8 + 0.35, Math.random() - 0.5).normalize().multiplyScalar(2.5 + Math.random() * 6 * power).addScaledVector(c, 0.9);
-      this.fire.emit(pos, v, 0.8 + Math.random() * 1.6 * power, time + Math.random() * 0.12, 0.7 + Math.random() * 0.9);
+      this.fire.emit(pos, v, 0.8 + Math.random() * 1.4 * power, time + Math.random() * 0.12, 0.6 + Math.random() * 0.8);
     }
     for (let k = 0; k < 24 * n; k++) {
       v.set((Math.random() - 0.5) * 3, 2 + Math.random() * 4, (Math.random() - 0.5) * 3).addScaledVector(c, 0.95);
-      this.flame.emit(pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 1.2, 0, (Math.random() - 0.5) * 1.2)), v, 0.7 + Math.random() * 1.1, time + Math.random() * 0.3, 0.6 + Math.random() * 0.6);
+      this.flame.emit(pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 1.4, -0.3, (Math.random() - 0.5) * 1.4)), v, 0.8 + Math.random() * 1.2, time + Math.random() * 0.4, 0.6 + Math.random() * 0.8);
     }
-    for (let k = 0; k < 90 * n; k++) {
-      v.set(Math.random() - 0.5, Math.random() * 1.3, Math.random() - 0.5).normalize().multiplyScalar(8 + Math.random() * 20).addScaledVector(c, 0.8);
+    for (let k = 0; k < 110 * n; k++) {
+      v.set(Math.random() - 0.5, Math.random() * 1.3, Math.random() - 0.5).normalize().multiplyScalar(8 + Math.random() * 22).addScaledVector(c, 0.8);
       this.spark.emit(pos, v, 0.035 + Math.random() * 0.05, time, 0.6 + Math.random() * 1.2);
     }
-    for (let k = 0; k < 26 * n; k++) {
-      const a = (k / 26) * Math.PI * 2;
-      v.set(Math.cos(a) * 9, 0.4, Math.sin(a) * 9).addScaledVector(c, 0.5);
+    // embers: fat, slow sparks on long arcs that keep glowing
+    for (let k = 0; k < 40 * n; k++) {
+      v.set(Math.random() - 0.5, 0.6 + Math.random() * 1.2, Math.random() - 0.5).normalize().multiplyScalar(5 + Math.random() * 10).addScaledVector(c, 0.7);
+      this.spark.emit(pos, v, 0.08 + Math.random() * 0.06, time, 1.6 + Math.random() * 1.6, 1, 0.75, 0.6);
+    }
+    this.chips(pos, new THREE.Vector3(0, 1, 0), c, time, Math.round(30 * n));
+    for (let k = 0; k < 30 * n; k++) {
+      const a = (k / 30) * Math.PI * 2;
+      v.set(Math.cos(a) * 10, 0.4, Math.sin(a) * 10).addScaledVector(c, 0.5);
       const g = 0.26 + Math.random() * 0.06;
-      this.smoke.emit(pos.clone().add(new THREE.Vector3(0, -0.8, 0)), v, 0.9 + Math.random() * 0.6, time, 2.2 + Math.random(), g, g * 0.92, g * 0.85);
+      this.smoke.emit(new THREE.Vector3(pos.x, gy + 0.4, pos.z), v, 1.0 + Math.random() * 0.7, time, 2.4 + Math.random(), g, g * 0.92, g * 0.85);
     }
-    for (let k = 0; k < 36 * n; k++) {
-      v.set((Math.random() - 0.5) * 2.5, 2 + Math.random() * 3, (Math.random() - 0.5) * 2.5).addScaledVector(c, 0.55);
+    for (let k = 0; k < 40 * n; k++) {
+      v.set((Math.random() - 0.5) * 2.5, 2.5 + Math.random() * 3.5, (Math.random() - 0.5) * 2.5).addScaledVector(c, 0.55);
       const g = 0.03 + Math.random() * 0.04;
-      this.smoke.emit(pos, v, 1.3 + Math.random() * 2, time + 0.1 + Math.random() * 0.6, 5 + Math.random() * 4, g, g, g);
+      this.smoke.emit(pos.clone().add(new THREE.Vector3(0, R * 0.6, 0)), v, 1.5 + Math.random() * 2.2, time + 0.6 + Math.random() * 1.4, 6 + Math.random() * 5, g, g, g);
     }
-    this.flash.position.copy(pos);
-    this.flashT = Math.max(this.flashT, power);
+    this.flash.position.copy(pos).add(new THREE.Vector3(0, 1.5, 0));
+    this.flashT = Math.max(this.flashT, power * 1.3);
+    this.booms.push({ pos: pos.clone(), power });
   }
   sparks(pos, dir, time, n = 8) {
     const v = new THREE.Vector3();
@@ -448,8 +523,13 @@ export class CrashFx {
   update(time, dt) {
     this.time = time;
     this.smoke.update(time); this.fire.update(time); this.flame.update(time); this.spark.update(time);
-    this.flashT = Math.max(0, this.flashT - dt * 2.5);
-    this.flash.intensity = this.flashT * this.flashT * 180;
+    this.shards.update(time); this.bits.update(time);
+    this.balls.update(dt, time, SMOKE_LIGHT.value);
+    this.shock.update(dt);
+    this.scorch.update(dt);
+    this.flashT = Math.max(0, this.flashT - dt * 1.6);
+    // a blinding flash, then the flicker of the fireball
+    this.flash.intensity = Math.min(this.flashT, 1.5) ** 2 * 150 * (this.flashT > 1 ? 1 : 0.75 + 0.25 * Math.sin(time * 37) * Math.sin(time * 23));
     this.fireLight.intensity = this.fireK * (26 + Math.sin(time * 31) * 6 + Math.sin(time * 17.3) * 5 + Math.random() * 6);
     this.fireK = 0;
   }
